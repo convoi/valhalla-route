@@ -1,0 +1,19 @@
+[project]
+name = "valhallaroute"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "osmium>=4.3.2",
+    "pandas>=3.1.1",
+    "pyproj>=3.8.0",
+    "pyvalhalla>=3.9.1",
+    "requests>=2.34.2",
+    "reverse-geocoder>=1.5.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

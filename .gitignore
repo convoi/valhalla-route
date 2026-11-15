@@ -1,0 +1,62 @@
+# Byte-compiled / optimized / binary caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dll
+*.dylib
+*.pyd
+
+# Test, lint, and coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Valhalla data, tiles, extracts, and OSM downloads
+valhalla_tiles/
+valhalla_tiles.tar
+osm_data/
+*.osm.pbf
+*.pbf
+*.gph
+valhalla.json
+
+# Large generated outputs
+output_enriched.csv
+*_enriched.csv
+*.csv.gz
+
+# Environments and package build artifacts
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Operating System files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Demo and benchmark datasets
+hannover_table.csv
+hannover_table*.csv
