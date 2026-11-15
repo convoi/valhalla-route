@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: valhallaroute-plan-batch
+  labels:
+    app.kubernetes.io/name: valhallaroute
+    app.kubernetes.io/component: batch-planner
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: valhallaroute
+        app.kubernetes.io/component: batch-planner
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: planner
+          image: ghcr.io/valhallaroute:v0.4.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "plan-batch"
+            - "--input"
+            - "s3://telematics-data/raw_trips/"
+            - "--manifest"
+            - "s3://telematics-data/manifests/job_tasks.jsonl"
+            - "--output-prefix"
+            - "s3://telematics-data/enriched_trips/"
+            - "--tile-storage-uri"
+            - "s3://valhalla-tiles/global/"
+            - "--batch-size"
+            - "10"
+            - "--format"
+            - "parquet"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
