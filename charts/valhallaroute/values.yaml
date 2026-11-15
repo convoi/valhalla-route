@@ -38,6 +38,25 @@ serviceAccount:
   labels: {}
   automountServiceAccountToken: true
 
+# Administrative Boundaries compilation (Overture Maps divisions -> admin.sqlite)
+adminBoundaries:
+  enabled: true
+  # Explicit ISO-3166-1 alpha-2 countries (e.g. ["DE", "AT", "CH"]). If empty ([]), auto-inferred from planned regions!
+  countries: []
+  # Administrative levels: 2 (Country), 4 (Region/State), 6 (County), 8 (City)
+  adminLevels: "2,4"
+  # Overture Maps GeoParquet release version
+  overtureRelease: "2026-10-21.0"
+  s3Region: "us-west-2"
+
+# Scheduled recurring full regeneration (e.g. monthly batch regeneration)
+schedule:
+  enabled: false
+  # Run on the 1st of every month at midnight UTC
+  cron: "0 0 1 * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+
 # Stage 1: Batch Planning Job (valhallaroute plan-batch)
 # Resolves continental/regional wildcard patterns into a task manifest JSONL file
 planner:
@@ -51,6 +70,15 @@ planner:
 
   # Optional multi-line string for a regions file (if provided, mounted via ConfigMap and passed as --regions-file)
   regionsFileContent: ""
+
+  # Tile-Aware Workload Balancing
+  # Automatically subdivides mega-regions (e.g. Germany -> 16 Bundesländer) if estimated tiles > maxTilesPerJob
+  autoSubdivide: true
+  maxTilesPerJob: 300
+  # Bin-packs small subregions (< minTilesPerJob) into balanced worker batches up to targetTilesPerJob
+  binPack: true
+  targetTilesPerJob: 200
+  minTilesPerJob: 50
 
   # Manifest destination URI (Azure Blob Storage URI: azure://<container>/<prefix>)
   manifestUri: "azure://valhalla-tiles/manifests/tiles_tasks.jsonl"

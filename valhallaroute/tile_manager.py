@@ -270,33 +270,40 @@ def download_osm_pbf(
 
 
 def build_valhalla_tiles(
-    osm_pbf_path: Union[str, Path],
+    osm_pbf_path: Union[str, Path, Sequence[Union[str, Path]]],
     *,
     tile_dir: Union[str, Path] = "valhalla_tiles",
     tile_extract: Union[str, Path] = "valhalla_tiles.tar",
     config_path: Union[str, Path, None] = None,
+    admin_db_path: Union[str, Path, None] = None,
     build_admins: bool = False,
     overwrite: bool = False,
     verbose: bool = True,
 ) -> Path:
     """
-    Build Valhalla routing tiles from an OpenStreetMap .osm.pbf file and package into a .tar extract.
+    Build Valhalla routing tiles from one or more OpenStreetMap .osm.pbf files and package into a .tar extract.
 
     Args:
-        osm_pbf_path: Path to the source .osm.pbf file.
+        osm_pbf_path: Path or sequence of paths to source .osm.pbf files.
         tile_dir: Directory where individual .gph tiles will be generated.
         tile_extract: Path to the target consolidated .tar tile archive.
         config_path: Path to write the temporary or permanent valhalla.json config.
-        build_admins: If True, compiles administrative boundaries db (best for planet/national extracts; disabled for sub-extracts).
+        admin_db_path: Optional path to compiled admin.sqlite database for boundary/access attribution.
+        build_admins: If True, compiles administrative boundaries db via valhalla_build_admins.
         overwrite: Overwrite existing tiles if present.
         verbose: Display build logging.
 
     Returns:
         Path to the generated tile_extract (.tar file).
     """
-    pbf = Path(osm_pbf_path).resolve()
-    if not pbf.exists():
-        raise FileNotFoundError(f"OSM PBF file not found: {pbf}")
+    if isinstance(osm_pbf_path, (str, Path)):
+        pbf_list = [Path(osm_pbf_path).resolve()]
+    else:
+        pbf_list = [Path(p).resolve() for p in osm_pbf_path]
+
+    for pbf in pbf_list:
+        if not pbf.exists():
+            raise FileNotFoundError(f"OSM PBF file not found: {pbf}")
 
     t_dir = Path(tile_dir).resolve()
     t_extract = Path(tile_extract).resolve()
@@ -320,7 +327,12 @@ def build_valhalla_tiles(
     cfg = _sanitize_config(default_config.copy())
     cfg["mjolnir"]["tile_dir"] = str(t_dir).replace("\\", "/")
     cfg["mjolnir"]["tile_extract"] = str(t_extract).replace("\\", "/")
-    if build_admins:
+
+    if admin_db_path:
+        admin_p = Path(admin_db_path).resolve()
+        cfg["mjolnir"]["admin"] = str(admin_p).replace("\\", "/")
+        cfg["mjolnir"]["data_processing"]["use_admin_db"] = True
+    elif build_admins:
         cfg["mjolnir"]["admin"] = str(t_dir / "admin.sqlite").replace("\\", "/")
         cfg["mjolnir"]["data_processing"]["use_admin_db"] = True
     else:
@@ -344,13 +356,13 @@ def build_valhalla_tiles(
     build_tiles_exe = bin_dir / ("valhalla_build_tiles.exe" if sys.platform == "win32" else "valhalla_build_tiles")
     build_admins_exe = bin_dir / ("valhalla_build_admins.exe" if sys.platform == "win32" else "valhalla_build_admins")
 
-    # 1. Run valhalla_build_admins (only if requested)
-    if build_admins and build_admins_exe.exists():
+    # 1. Run valhalla_build_admins (only if requested and no external admin_db_path provided)
+    if build_admins and not admin_db_path and build_admins_exe.exists():
         if verbose:
             print("Building administrative boundaries (valhalla_build_admins)...")
         try:
             subprocess.run(
-                [str(build_admins_exe), "-c", str(cfg_file), str(pbf)],
+                [str(build_admins_exe), "-c", str(cfg_file), *[str(p) for p in pbf_list]],
                 env=env,
                 capture_output=not verbose,
                 check=False,
@@ -362,11 +374,12 @@ def build_valhalla_tiles(
     if not build_tiles_exe.exists():
         raise FileNotFoundError(f"Valhalla build binary not found at {build_tiles_exe}")
 
+    names_str = ", ".join(p.name for p in pbf_list)
     if verbose:
-        print(f"Building Valhalla graph tiles from {pbf.name}...")
+        print(f"Building Valhalla graph tiles from {names_str}...")
 
     res = subprocess.run(
-        [str(build_tiles_exe), "-c", str(cfg_file), str(pbf)],
+        [str(build_tiles_exe), "-c", str(cfg_file), *[str(p) for p in pbf_list]],
         env=env,
         capture_output=True,
         text=True,

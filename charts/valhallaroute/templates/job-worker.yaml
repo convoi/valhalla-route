@@ -52,6 +52,10 @@ spec:
             - "--tile-storage-uri"
             - {{ .Values.worker.tileStorageUri | quote }}
             {{- end }}
+            {{- if .Values.worker.adminDbUri }}
+            - "--admin-db-uri"
+            - {{ .Values.worker.adminDbUri | quote }}
+            {{- end }}
           env:
             - name: JOB_COMPLETION_INDEX
               valueFrom:

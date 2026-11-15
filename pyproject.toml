@@ -14,6 +14,7 @@ dependencies = [
     "reverse-geocoder>=1.5.1",
     "obstore>=0.12.0",
     "pyarrow>=15.0.0",
+    "duckdb>=2.0.0",
 ]
 
 [project.scripts]

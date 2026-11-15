@@ -23,6 +23,8 @@ from .storage import (
     uri_to_local_path,
 )
 
+from .admin_builder import build_admin_sqlite_from_overture, wkb_to_spatialite_blob
+
 __all__ = [
     "enrich_gps_points",
     "read_gps_csv",
@@ -44,4 +46,6 @@ __all__ = [
     "get_valhalla_tile_relative_path",
     "plan_batch",
     "run_worker",
+    "build_admin_sqlite_from_overture",
+    "wkb_to_spatialite_blob",
 ]

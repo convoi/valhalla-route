@@ -56,6 +56,31 @@ spec:
             - {{ .Values.planner.manifestUri | quote }}
             - "--output"
             - {{ .Values.planner.outputUri | quote }}
+            {{- if .Values.planner.autoSubdivide }}
+            - "--auto-subdivide"
+            - "--max-tiles"
+            - {{ .Values.planner.maxTilesPerJob | quote }}
+            {{- else }}
+            - "--no-auto-subdivide"
+            {{- end }}
+            {{- if .Values.planner.binPack }}
+            - "--bin-pack"
+            - "--target-tiles"
+            - {{ .Values.planner.targetTilesPerJob | quote }}
+            - "--min-tiles"
+            - {{ .Values.planner.minTilesPerJob | quote }}
+            {{- else }}
+            - "--no-bin-pack"
+            {{- end }}
+            {{- if .Values.adminBoundaries.enabled }}
+            - "--admin-boundaries"
+            {{- if .Values.adminBoundaries.countries }}
+            - "--admin-countries"
+            {{- range .Values.adminBoundaries.countries }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           env:
             {{- if .Values.azure.storageAccountName }}
             - name: AZURE_STORAGE_ACCOUNT_NAME

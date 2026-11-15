@@ -362,8 +362,44 @@ The benchmark suite (`benchmarks/benchmark_hannover.py`) uses the real-world dat
 
 ---
 
+## Building Administrative Boundaries (`admin.sqlite`)
+
+Valhalla routing uses an SQLite/SpatiaLite database (`admin.sqlite`) during tile compilation (`valhalla_build_tiles`) to determine country and state boundaries, driving side (left vs. right), road access defaults, and border crossing detection.
+
+ValhallaRoute includes a high-performance admin compiler that streams directly from **Overture Maps GeoParquet** (`theme=divisions`) via DuckDB and generates a 100% compliant SpatiaLite database without requiring external SpatiaLite C shared libraries.
+
+### Usage
+
+```bash
+# Compile administrative database for specific countries (e.g. Germany, Austria, Switzerland)
+uv run valhallaroute build-admin -o admin.sqlite -c DE AT CH
+
+# Compile Netherlands with country (2) and regional/provincial (4) boundaries
+uv run valhallaroute build-admin -o admin.sqlite -c NL --admin-levels 2,4
+
+# Compile the entire planet
+uv run valhallaroute build-admin -o planet_admin.sqlite --admin-levels 2,4
+
+# Include county (6) and municipality/locality (8) boundaries
+uv run valhallaroute build-admin -o admin_detailed.sqlite -c NL --admin-levels 2,4,6,8
+```
+
+### Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `-o`, `--output` | `admin.sqlite` | Destination SQLite database file path. |
+| `-c`, `--countries` | *all* (planet) | Space-separated ISO-3166-1 alpha-2 country codes. |
+| `--admin-levels` | `2,4` | Administrative levels: `2` (country), `4` (state/province), `6` (county), `8` (city). |
+| `--release` | `2026-10-21.0` | Overture Maps release version. |
+| `--s3-region` | `us-west-2` | AWS region for Overture public S3 bucket. |
+| `--no-maritime` | *false* | Exclude maritime territorial bounds and retain only land boundaries. |
+
+---
+
 ## Running Tests
 
 ```bash
 uv run pytest
 ```
+

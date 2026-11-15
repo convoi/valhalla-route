@@ -127,8 +127,19 @@ helm install valhallaroute ./charts/valhallaroute \
 | `azure.workloadIdentity.tenantId` | Azure Entra Tenant ID (optional) | `""` |
 | `serviceAccount.create` | Create ServiceAccount with Workload Identity annotations | `true` |
 | `serviceAccount.name` | ServiceAccount name | `""` (defaults to release fullname) |
+| `adminBoundaries.enabled` | Automatically compile `admin.sqlite` from Overture Maps | `true` |
+| `adminBoundaries.countries` | Explicit ISO countries (empty = auto-inferred from regions) | `[]` |
+| `adminBoundaries.adminLevels` | Boundary levels: 2 (Country), 4 (Region), 6 (County), 8 (City) | `"2,4"` |
+| `adminBoundaries.overtureRelease` | Overture Maps GeoParquet release version | `"2026-10-21.0"` |
+| `schedule.enabled` | Enable recurring Kubernetes CronJob (e.g. monthly regeneration) | `false` |
+| `schedule.cron` | Cron schedule expression | `"0 0 1 * *"` (Monthly) |
 | `planner.enabled` | Enable Stage 1 batch planning job | `true` |
 | `planner.regions` | List of regions or wildcards (`germany/*`, `europe/monaco`) | `["germany/*"]` |
+| `planner.autoSubdivide` | Subdivide mega-regions (> maxTilesPerJob) into child regions | `true` |
+| `planner.maxTilesPerJob` | Max estimated tiles per task before auto-subdividing | `300` |
+| `planner.binPack` | Bin-pack small regions (< minTilesPerJob) into balanced tasks | `true` |
+| `planner.targetTilesPerJob` | Target tile count per worker task during bin-packing | `200` |
+| `planner.minTilesPerJob` | Lower threshold before bundling small regions together | `50` |
 | `planner.manifestUri` | Manifest JSONL target URI | `azure://valhalla-tiles/manifests/tiles_tasks.jsonl` |
 | `planner.outputUri` | Destination cloud prefix for tiles | `azure://valhalla-tiles/global/` |
 | `planner.resources.requests.cpu` | Planner CPU request | `1` |
@@ -140,6 +151,7 @@ helm install valhallaroute ./charts/valhallaroute \
 | `worker.parallelism` | Max concurrent worker pods | `4` |
 | `worker.manifestUri` | URI of manifest JSONL file to read | `azure://valhalla-tiles/manifests/tiles_tasks.jsonl` |
 | `worker.tileStorageUri` | Destination cloud storage URI prefix | `azure://valhalla-tiles/global/` |
+| `worker.adminDbUri` | Optional override URI for `admin.sqlite` | `""` |
 | `worker.resources.requests.cpu` | Worker CPU request | `8` |
 | `worker.resources.requests.memory`| Worker memory request | `16Gi` |
 | `worker.resources.limits.cpu` | Worker CPU limit | `8` |

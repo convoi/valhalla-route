@@ -66,6 +66,7 @@ def test_plan_batch_with_regions_file(tmp_path: Path):
         regions_file=str(regions_file),
         output_manifest_uri=str(manifest_path),
         tile_storage_uri="s3://valhalla-tiles/global/",
+        bin_pack=False,
     )
 
     assert len(tasks) == 2
@@ -160,3 +161,105 @@ def test_cli_plan_batch_and_run_worker(tmp_path: Path, monkeypatch: pytest.Monke
     ])
     assert ret == 0
     assert (tile_output_dir / "0" / "000" / "001.gph").exists()
+
+
+def test_auto_subdivide_and_bin_pack(tmp_path: Path):
+    manifest_path = tmp_path / "balanced_manifest.jsonl"
+    # When germany is requested with auto_subdivide=True and max_tiles=300:
+    # Germany has 1,216 tiles, so it will subdivide into its 16 Bundesländer.
+    # Bremen, Saarland, Berlin, etc. have < 50 tiles, so bin-packing will group them.
+    tasks = plan_batch(
+        regions=["germany"],
+        output_manifest_uri=str(manifest_path),
+        tile_storage_uri="s3://valhalla-tiles/global/",
+        auto_subdivide=True,
+        max_tiles_per_job=300,
+        bin_pack=True,
+        target_tiles_per_job=200,
+        min_tiles_per_job=50,
+        verbose=False,
+    )
+
+    # All 16 states are accounted for, but bundled into fewer than 16 tasks due to bin packing!
+    all_regions = []
+    for t in tasks:
+        all_regions.extend(t["regions"])
+    assert len(all_regions) == 16
+    assert len(tasks) < 16  # Small states were bin-packed together!
+    assert "bayern" in all_regions
+    assert "bremen" in all_regions
+
+
+def test_plan_batch_with_admin_boundaries(tmp_path: Path):
+    manifest_path = tmp_path / "admin_manifest.jsonl"
+    tile_storage = tmp_path / "tiles_storage"
+    tile_storage.mkdir()
+
+    # Mock build_admin_sqlite_from_overture
+    def mock_build_admin(output_path, **kwargs):
+        p = Path(output_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"mock-admin-sqlite")
+        return {"output_path": str(p), "total_records": 1}
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("valhallaroute.batch.build_admin_sqlite_from_overture", mock_build_admin)
+        tasks = plan_batch(
+            regions=["bayern"],
+            output_manifest_uri=str(manifest_path),
+            tile_storage_uri=f"file://{tile_storage.as_posix()}",
+            build_admins=True,
+            admin_countries=["DE"],
+            verbose=False,
+        )
+
+    assert len(tasks) == 1
+    assert "admin_db_uri" in tasks[0]
+    assert tasks[0]["admin_db_uri"].endswith("admin.sqlite")
+    assert (tile_storage / "admin.sqlite").exists()
+    assert (tile_storage / "admin.sqlite").read_bytes() == b"mock-admin-sqlite"
+
+
+def test_worker_with_admin_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    tile_output = tmp_path / "tiles_out"
+    tile_output.mkdir()
+    admin_file = tmp_path / "source_admin.sqlite"
+    admin_file.write_bytes(b"admin-db-data")
+
+    task = {
+        "task_id": 0,
+        "task_type": "build_tiles",
+        "regions": ["bremen", "hamburg"],
+        "osm_urls": ["https://example.com/bremen.pbf", "https://example.com/hamburg.pbf"],
+        "admin_db_uri": f"file://{admin_file.as_posix()}",
+        "tile_storage_uri": f"file://{tile_output.as_posix()}",
+    }
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(task) + "\n")
+
+    captured_build_args = {}
+
+    def mock_download(url, dest_path, **kwargs):
+        p = Path(dest_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"fake-pbf")
+        return p
+
+    def mock_build(osm_pbf_path, tile_dir, admin_db_path=None, **kwargs):
+        captured_build_args["pbfs"] = osm_pbf_path
+        captured_build_args["admin_db"] = admin_db_path
+        t = Path(tile_dir) / "0" / "000" / "001.gph"
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_bytes(b"tile-data")
+
+    monkeypatch.setattr("valhallaroute.batch.download_file", mock_download)
+    monkeypatch.setattr("valhallaroute.batch.build_valhalla_tiles", mock_build)
+    monkeypatch.setenv("JOB_COMPLETION_INDEX", "0")
+
+    summary = run_worker(manifest_uri=str(manifest), verbose=False)
+
+    assert summary["tiles_count"] == 1
+    assert len(captured_build_args["pbfs"]) == 2  # Multi-PBF bin packed!
+    assert captured_build_args["admin_db"] is not None
+    assert captured_build_args["admin_db"].read_bytes() == b"admin-db-data"
+
