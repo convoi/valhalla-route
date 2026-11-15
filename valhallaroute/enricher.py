@@ -106,10 +106,31 @@ def read_gps_csv(
     return df, actual_lat_col, actual_lon_col, actual_time_col
 
 
+def _classify_turn(angle: float) -> str:
+    """Classify turn direction from signed angle in degrees (-180 to +180)."""
+    abs_angle = abs(angle)
+    if abs_angle > 165.0:
+        return "u_turn"
+    if angle > 135.0:
+        return "sharp_right"
+    if angle < -135.0:
+        return "sharp_left"
+    if angle > 45.0:
+        return "right_turn"
+    if angle < -45.0:
+        return "left_turn"
+    if angle > 20.0:
+        return "slight_right"
+    if angle < -20.0:
+        return "slight_left"
+    return "straight"
+
+
 def _process_trace_attributes_response(
     response: dict[str, Any],
     num_points: int,
     intersection_buffer_meters: float = 10.0,
+    roundabout_buffer_meters: float = 10.0,
 ) -> list[dict[str, Any]]:
     """
     Extract point-level attribution from Valhalla trace_attributes response.
@@ -131,6 +152,13 @@ def _process_trace_attributes_response(
         crossing_type = None
         is_intersection = False
         intersection_type = None
+        has_traffic_signal = False
+        lane_count = None
+        is_turn = False
+        turn_direction = None
+        turn_angle = None
+        is_roundabout = False
+        roundabout_action = None
         road_name = None
         road_type = None
         country = None
@@ -149,25 +177,72 @@ def _process_trace_attributes_response(
                 is_crossing = True
                 crossing_type = "border_crossing"
 
-            # Intersection detection based on distance to begin / end nodes
+            # Lane count
+            if edge.get("lane_count") is not None:
+                lane_count = int(edge["lane_count"])
+
+            # Traffic signals on edge
+            if edge.get("traffic_signal"):
+                has_traffic_signal = True
+
+            # Distance calculations along edge
             elen_m = edge.get("length", 0.0) * 1000.0
             dalong_ratio = pt.get("distance_along_edge", 0.0)
             d_from_begin = dalong_ratio * elen_m
             d_to_end = (1.0 - dalong_ratio) * elen_m
 
-            # Check proximity to end node
+            # Intersection and turn detection
             if d_to_end <= intersection_buffer_meters and "end_node" in edge:
                 en = edge["end_node"]
                 is_intersection = True
-                intersection_type = "traffic_signals" if en.get("traffic_signal") else en.get("type")
-            # Check proximity to begin node (end_node of edge_index - 1)
+                intersection_type = en.get("type", "street_intersection")
+                if en.get("traffic_signal"):
+                    has_traffic_signal = True
+
+                if edge_index + 1 < len(edges):
+                    h_in = edge.get("end_heading")
+                    h_out = edges[edge_index + 1].get("begin_heading")
+                    if h_in is not None and h_out is not None:
+                        diff = (h_out - h_in + 180) % 360 - 180
+                        turn_angle = round(float(diff), 1)
+                        is_turn = bool(abs(diff) > 20.0)
+                        turn_direction = _classify_turn(diff)
+
             elif d_from_begin <= intersection_buffer_meters and edge_index > 0 and "end_node" in edges[edge_index - 1]:
                 bn = edges[edge_index - 1]["end_node"]
                 is_intersection = True
-                intersection_type = "traffic_signals" if bn.get("traffic_signal") else bn.get("type")
-            elif edge.get("traffic_signal") and (d_to_end <= intersection_buffer_meters or d_from_begin <= intersection_buffer_meters):
-                is_intersection = True
-                intersection_type = "traffic_signals"
+                intersection_type = bn.get("type", "street_intersection")
+                if bn.get("traffic_signal"):
+                    has_traffic_signal = True
+
+                h_in = edges[edge_index - 1].get("end_heading")
+                h_out = edge.get("begin_heading")
+                if h_in is not None and h_out is not None:
+                    diff = (h_out - h_in + 180) % 360 - 180
+                    turn_angle = round(float(diff), 1)
+                    is_turn = bool(abs(diff) > 20.0)
+                    turn_direction = _classify_turn(diff)
+
+            # Roundabout detection & entering/traversing/exiting classification
+            is_curr_rb = bool(edge.get("roundabout", False) or edge.get("use") == "roundabout")
+            is_prev_rb = bool(edges[edge_index - 1].get("roundabout", False) or edges[edge_index - 1].get("use") == "roundabout") if edge_index > 0 else False
+            is_next_rb = bool(edges[edge_index + 1].get("roundabout", False) or edges[edge_index + 1].get("use") == "roundabout") if edge_index + 1 < len(edges) else False
+
+            if is_curr_rb:
+                is_roundabout = True
+                if not is_prev_rb and d_from_begin <= roundabout_buffer_meters:
+                    roundabout_action = "entering"
+                elif not is_next_rb and d_to_end <= roundabout_buffer_meters:
+                    roundabout_action = "exiting"
+                else:
+                    roundabout_action = "traversing"
+            else:
+                if is_next_rb and d_to_end <= roundabout_buffer_meters:
+                    is_roundabout = True
+                    roundabout_action = "entering"
+                elif is_prev_rb and d_from_begin <= roundabout_buffer_meters:
+                    is_roundabout = True
+                    roundabout_action = "exiting"
 
             # Road name: take primary name if available
             names = edge.get("names")
@@ -198,6 +273,13 @@ def _process_trace_attributes_response(
             "crossing_type": crossing_type,
             "is_intersection": is_intersection,
             "intersection_type": intersection_type,
+            "has_traffic_signal": has_traffic_signal,
+            "lane_count": lane_count,
+            "is_turn": is_turn,
+            "turn_direction": turn_direction,
+            "turn_angle": turn_angle,
+            "is_roundabout": is_roundabout,
+            "roundabout_action": roundabout_action,
             "city": city,
             "country": country,
             "road_name": road_name,
@@ -213,6 +295,7 @@ def _execute_single_trace(
     costing: str = "auto",
     shape_match: str = "map_snap",
     intersection_buffer_meters: float = 10.0,
+    roundabout_buffer_meters: float = 10.0,
 ) -> list[dict[str, Any]]:
     """Execute a single trace_attributes request with graceful fallbacks."""
     payload = {
@@ -222,14 +305,18 @@ def _execute_single_trace(
     }
     try:
         resp = backend.trace_attributes(payload)
-        return _process_trace_attributes_response(resp, len(shape), intersection_buffer_meters)
+        return _process_trace_attributes_response(
+            resp, len(shape), intersection_buffer_meters, roundabout_buffer_meters
+        )
     except Exception:
         # If map_snap fails, try walk_or_snap
         if shape_match != "walk_or_snap":
             try:
                 payload["shape_match"] = "walk_or_snap"
                 resp = backend.trace_attributes(payload)
-                return _process_trace_attributes_response(resp, len(shape), intersection_buffer_meters)
+                return _process_trace_attributes_response(
+                    resp, len(shape), intersection_buffer_meters, roundabout_buffer_meters
+                )
             except Exception:
                 pass
 
@@ -242,6 +329,13 @@ def _execute_single_trace(
                 "crossing_type": None,
                 "is_intersection": False,
                 "intersection_type": None,
+                "has_traffic_signal": False,
+                "lane_count": None,
+                "is_turn": False,
+                "turn_direction": None,
+                "turn_angle": None,
+                "is_roundabout": False,
+                "roundabout_action": None,
                 "city": None,
                 "country": None,
                 "road_name": None,
@@ -259,6 +353,7 @@ def _call_backend_in_chunks(
     chunk_size: int = 5000,
     overlap: int = 5,
     intersection_buffer_meters: float = 10.0,
+    roundabout_buffer_meters: float = 10.0,
 ) -> list[dict[str, Any]]:
     """
     Send shape points to Valhalla backend, handling chunking for large traces.
@@ -270,11 +365,15 @@ def _call_backend_in_chunks(
     # If only 1 point, duplicate it to satisfy trace_attributes minimum requirement (>=2 points)
     if total_points == 1:
         single_shape = [shape[0], shape[0]]
-        res = _execute_single_trace(backend, single_shape, costing, shape_match, intersection_buffer_meters)
+        res = _execute_single_trace(
+            backend, single_shape, costing, shape_match, intersection_buffer_meters, roundabout_buffer_meters
+        )
         return [res[0]]
 
     if total_points <= chunk_size:
-        return _execute_single_trace(backend, shape, costing, shape_match, intersection_buffer_meters)
+        return _execute_single_trace(
+            backend, shape, costing, shape_match, intersection_buffer_meters, roundabout_buffer_meters
+        )
 
     # Chunking for long traces
     accumulated_results: list[dict[str, Any]] = []
@@ -284,7 +383,9 @@ def _call_backend_in_chunks(
         end_idx = min(start_idx + chunk_size, total_points)
         chunk_shape = shape[start_idx:end_idx]
 
-        chunk_res = _execute_single_trace(backend, chunk_shape, costing, shape_match, intersection_buffer_meters)
+        chunk_res = _execute_single_trace(
+            backend, chunk_shape, costing, shape_match, intersection_buffer_meters, roundabout_buffer_meters
+        )
 
         if start_idx == 0:
             accumulated_results.extend(chunk_res)
@@ -319,6 +420,7 @@ def enrich_gps_points(
     reverse_geocode_cities: bool = True,
     crossing_buffer_meters: float = 10.0,
     intersection_buffer_meters: float = 10.0,
+    roundabout_buffer_meters: float = 10.0,
     chunk_size: int = 5000,
     auto_build_tiles: bool = True,
     osm_pbf: Union[str, Path, None] = None,
@@ -337,6 +439,13 @@ def enrich_gps_points(
         - crossing_type (str or None)
         - is_intersection (bool)
         - intersection_type (str or None)
+        - has_traffic_signal (bool)
+        - lane_count (int or None)
+        - is_turn (bool)
+        - turn_direction (str or None)
+        - turn_angle (float or None)
+        - is_roundabout (bool)
+        - roundabout_action (str or None)
         - city (str or None)
         - country (str or None)
         - road_name (str or None)
@@ -360,6 +469,7 @@ def enrich_gps_points(
         reverse_geocode_cities: If True, resolves city/country using offline reverse geocoding.
         crossing_buffer_meters: Search radius around OSM crossings (default 10m).
         intersection_buffer_meters: Search radius around road intersections (default 10m).
+        roundabout_buffer_meters: Buffer radius for roundabout entry/exit detection (default 10m).
         chunk_size: Maximum shape points per Valhalla request.
         auto_build_tiles: If True and local tiles are missing, downloads OSM data and builds them.
         osm_pbf: Path to local .osm.pbf file.
@@ -388,6 +498,13 @@ def enrich_gps_points(
         res_df["crossing_type"] = pd.Series(dtype=str)
         res_df["is_intersection"] = pd.Series(dtype=bool)
         res_df["intersection_type"] = pd.Series(dtype=str)
+        res_df["has_traffic_signal"] = pd.Series(dtype=bool)
+        res_df["lane_count"] = pd.Series(dtype="Int64")
+        res_df["is_turn"] = pd.Series(dtype=bool)
+        res_df["turn_direction"] = pd.Series(dtype=str)
+        res_df["turn_angle"] = pd.Series(dtype=float)
+        res_df["is_roundabout"] = pd.Series(dtype=bool)
+        res_df["roundabout_action"] = pd.Series(dtype=str)
         res_df["city"] = pd.Series(dtype=str)
         res_df["country"] = pd.Series(dtype=str)
         res_df["road_name"] = pd.Series(dtype=str)
@@ -440,6 +557,13 @@ def enrich_gps_points(
         "crossing_type": None,
         "is_intersection": False,
         "intersection_type": None,
+        "has_traffic_signal": False,
+        "lane_count": None,
+        "is_turn": False,
+        "turn_direction": None,
+        "turn_angle": None,
+        "is_roundabout": False,
+        "roundabout_action": None,
         "city": None,
         "country": None,
         "road_name": None,
@@ -477,6 +601,7 @@ def enrich_gps_points(
                 shape_match=shape_match,
                 chunk_size=chunk_size,
                 intersection_buffer_meters=intersection_buffer_meters,
+                roundabout_buffer_meters=roundabout_buffer_meters,
             )
 
             # Assign back by row index in DataFrame
@@ -511,6 +636,7 @@ def enrich_gps_points(
             shape_match=shape_match,
             chunk_size=chunk_size,
             intersection_buffer_meters=intersection_buffer_meters,
+            roundabout_buffer_meters=roundabout_buffer_meters,
         )
 
     # OSM Crossings lookup within radius buffer
@@ -538,6 +664,8 @@ def enrich_gps_points(
                     if is_c:
                         matched_results[i]["is_crossing"] = True
                         matched_results[i]["crossing_type"] = c_type
+                        if c_type == "traffic_signals":
+                            matched_results[i]["has_traffic_signal"] = True
         except Exception as exc:
             if verbose:
                 print(f"Warning: Crossing lookup failed: {exc}")
@@ -560,6 +688,13 @@ def enrich_gps_points(
     enriched_df["crossing_type"] = [r["crossing_type"] for r in matched_results]
     enriched_df["is_intersection"] = [r["is_intersection"] for r in matched_results]
     enriched_df["intersection_type"] = [r["intersection_type"] for r in matched_results]
+    enriched_df["has_traffic_signal"] = [r["has_traffic_signal"] for r in matched_results]
+    enriched_df["lane_count"] = [r["lane_count"] for r in matched_results]
+    enriched_df["is_turn"] = [r["is_turn"] for r in matched_results]
+    enriched_df["turn_direction"] = [r["turn_direction"] for r in matched_results]
+    enriched_df["turn_angle"] = [r["turn_angle"] for r in matched_results]
+    enriched_df["is_roundabout"] = [r["is_roundabout"] for r in matched_results]
+    enriched_df["roundabout_action"] = [r["roundabout_action"] for r in matched_results]
     enriched_df["city"] = [r["city"] for r in matched_results]
     enriched_df["country"] = [r["country"] for r in matched_results]
     enriched_df["road_name"] = [r["road_name"] for r in matched_results]

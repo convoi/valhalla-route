@@ -1,4 +1,6 @@
 """ValhallaRoute: GPS trip route enrichment using Valhalla."""
+__version__ = "0.2.0"
+
 from .client import ActorBackend, HttpBackend, ValhallaBackend, resolve_backend
 from .crossings import CrossingIndexer
 from .enricher import enrich_gps_points, read_gps_csv

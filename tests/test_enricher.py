@@ -89,6 +89,13 @@ def test_enrich_with_mock_backend():
     assert "crossing_type" in res_df.columns
     assert "is_intersection" in res_df.columns
     assert "intersection_type" in res_df.columns
+    assert "has_traffic_signal" in res_df.columns
+    assert "lane_count" in res_df.columns
+    assert "is_turn" in res_df.columns
+    assert "turn_direction" in res_df.columns
+    assert "turn_angle" in res_df.columns
+    assert "is_roundabout" in res_df.columns
+    assert "roundabout_action" in res_df.columns
     assert "city" in res_df.columns
     assert "country" in res_df.columns
     assert "road_name" in res_df.columns
@@ -133,6 +140,13 @@ def test_empty_dataframe():
     assert "crossing_type" in res.columns
     assert "is_intersection" in res.columns
     assert "intersection_type" in res.columns
+    assert "has_traffic_signal" in res.columns
+    assert "lane_count" in res.columns
+    assert "is_turn" in res.columns
+    assert "turn_direction" in res.columns
+    assert "turn_angle" in res.columns
+    assert "is_roundabout" in res.columns
+    assert "roundabout_action" in res.columns
     assert "city" in res.columns
     assert "country" in res.columns
     assert "road_name" in res.columns
@@ -211,7 +225,8 @@ def test_intersection_detection():
         intersection_buffer_meters=10.0,
     )
     assert bool(res.loc[0, "is_intersection"]) is True
-    assert res.loc[0, "intersection_type"] == "traffic_signals"
+    assert res.loc[0, "intersection_type"] == "street_intersection"
+    assert bool(res.loc[0, "has_traffic_signal"]) is True
     assert bool(res.loc[1, "is_intersection"]) is False
     assert pd.isna(res.loc[1, "intersection_type"]) or res.loc[1, "intersection_type"] is None
 
@@ -236,3 +251,65 @@ def test_crossing_indexer():
     assert c_types[0] == "zebra"
     assert is_c[1] is False
     assert c_types[1] is None
+
+
+def test_roundabout_and_turn_detection():
+    mock_resp = {
+        "admins": [{"country_text": "Germany"}],
+        "edges": [
+            {
+                "length": 0.05,  # 50m
+                "roundabout": False,
+                "begin_heading": 0,
+                "end_heading": 0,
+                "lane_count": 2,
+                "traffic_signal": True,
+                "end_node": {"type": "street_intersection", "traffic_signal": True},
+            },
+            {
+                "length": 0.06,  # 60m
+                "roundabout": True,
+                "begin_heading": 90,
+                "end_heading": 90,
+                "lane_count": 2,
+                "end_node": {"type": "street_intersection"},
+            },
+            {
+                "length": 0.05,  # 50m
+                "roundabout": False,
+                "begin_heading": 180,
+                "end_heading": 180,
+            },
+        ],
+        "matched_points": [
+            # Pt 0: near end of edge 0 (45m along, 5m to roundabout entry) -> entering
+            {"type": "matched", "edge_index": 0, "distance_along_edge": 0.90},
+            # Pt 1: inside roundabout (30m along edge 1) -> traversing
+            {"type": "matched", "edge_index": 1, "distance_along_edge": 0.50},
+            # Pt 2: near end of edge 1 (55m along, 5m to exit) -> exiting
+            {"type": "matched", "edge_index": 1, "distance_along_edge": 0.92},
+        ],
+    }
+    csv_data = "lat,lon\n52.52,13.40\n52.521,13.401\n52.522,13.402\n"
+    res = enrich_gps_points(
+        io.StringIO(csv_data),
+        backend=MockBackend(mock_resp),
+        intersection_buffer_meters=10.0,
+        roundabout_buffer_meters=10.0,
+    )
+    # Pt 0
+    assert bool(res.loc[0, "is_roundabout"]) is True
+    assert res.loc[0, "roundabout_action"] == "entering"
+    assert bool(res.loc[0, "has_traffic_signal"]) is True
+    assert res.loc[0, "lane_count"] == 2
+    assert bool(res.loc[0, "is_turn"]) is True
+    assert res.loc[0, "turn_direction"] == "right_turn"
+    assert res.loc[0, "turn_angle"] == 90.0
+
+    # Pt 1
+    assert bool(res.loc[1, "is_roundabout"]) is True
+    assert res.loc[1, "roundabout_action"] == "traversing"
+
+    # Pt 2
+    assert bool(res.loc[2, "is_roundabout"]) is True
+    assert res.loc[2, "roundabout_action"] == "exiting"
