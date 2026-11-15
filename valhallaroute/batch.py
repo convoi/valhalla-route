@@ -1,118 +1,135 @@
-"""Batch job planner and indexed worker execution for distributed cloud workflows."""
+"""Batch job planner and indexed worker execution for continental/region-wise tile generation."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import shutil
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
-import pandas as pd
-
-from .enricher import enrich_gps_points, read_gps_csv
 from .storage import StorageManager, uri_to_local_path
+from .tile_manager import build_valhalla_tiles, download_file, fetch_geofabrik_index
+
+
+def resolve_regions(
+    region_queries: Sequence[str],
+    index: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Resolve a sequence of region queries or wildcards into matching Geofabrik features.
+
+    Supports:
+    - Region id / slug: 'bayern', 'berlin', 'monaco'
+    - Canonical path / name: 'Bayern', 'europe/germany/bayern'
+    - Wildcards: 'germany/*', 'germany*', 'europe/*' expanding to all subregions where parent == base
+    """
+    if index is None:
+        index = fetch_geofabrik_index()
+
+    features = index.get("features", [])
+    resolved: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for q in region_queries:
+        q_clean = q.lower().strip()
+        if not q_clean:
+            continue
+
+        is_wildcard = q_clean.endswith("/*") or q_clean.endswith("*")
+        base = q_clean.rstrip("*").rstrip("/")
+
+        matched_any = False
+        for feat in features:
+            props = feat.get("properties", {})
+            fid = props.get("id", "").lower()
+            fname = props.get("name", "").lower()
+            parent = props.get("parent", "").lower()
+
+            if is_wildcard:
+                if parent == base or fid.startswith(base + "/") or f"/{base}/" in fid:
+                    if fid not in seen_ids:
+                        seen_ids.add(fid)
+                        resolved.append(props)
+                        matched_any = True
+            else:
+                if q_clean in (fid, fname) or f"/{q_clean}" in fid or fid.endswith(f"/{q_clean}"):
+                    if fid not in seen_ids:
+                        seen_ids.add(fid)
+                        resolved.append(props)
+                        matched_any = True
+                    break
+
+        if not matched_any and not is_wildcard:
+            raise ValueError(f"Could not find any Geofabrik region matching '{q}' in index.")
+
+    return resolved
 
 
 def plan_batch(
-    input_uri: str,
-    output_manifest_uri: str,
-    output_prefix: str,
-    tile_storage_uri: str | None = None,
-    batch_size: int = 1,
-    trip_col: str | None = None,
-    output_ext: str = "parquet",
-    costing: str = "auto",
+    regions: Sequence[str] | None = None,
+    regions_file: str | Path | None = None,
+    output_manifest_uri: str = "manifest.jsonl",
+    tile_storage_uri: str = "s3://valhalla-tiles/global/",
+    geofabrik_index: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Generate an indexed task manifest (JSONL) for distributed Kubernetes batch processing.
+    Generate an indexed task manifest (JSONL) for continental/region-wise tile generation.
 
     Args:
-        input_uri: URI or path to input directory, prefix, or single CSV/Parquet file.
-        output_manifest_uri: Destination URI or path for the generated JSONL manifest.
-        output_prefix: Destination blob prefix or directory for enriched files.
-        tile_storage_uri: Remote blob URI containing Valhalla .gph tiles.
-        batch_size: Number of files or trips per indexed task chunk (default: 1).
-        trip_col: Optional trip column name (if splitting trips within a single file).
-        output_ext: Output file extension, 'parquet' or 'csv' (default: 'parquet').
-        costing: Valhalla costing model (default: 'auto').
+        regions: List of region names, slugs, or wildcards (e.g. ['bayern', 'berlin', 'germany/*']).
+        regions_file: Path or URI to text file containing region names (one per line).
+        output_manifest_uri: Destination URI or path for the generated task manifest (JSONL).
+        tile_storage_uri: Destination blob storage prefix where .gph tiles will be uploaded.
+        geofabrik_index: Optional pre-loaded Geofabrik index dict.
 
     Returns:
         List of generated task dictionaries.
     """
-    is_remote_input = "://" in input_uri and not input_uri.startswith("file://")
-    discovered_files: list[str] = []
+    all_queries: list[str] = []
 
-    # Check if input is a single file or a collection of files
-    if is_remote_input:
-        in_mgr = StorageManager.from_uri(input_uri)
-        if input_uri.lower().endswith((".csv", ".parquet", ".pq")):
-            discovered_files = [input_uri]
-        else:
-            files = in_mgr.list_files()
-            valid_exts = (".csv", ".parquet", ".pq")
-            matching = [f for f in files if f.lower().endswith(valid_exts)]
-            # Reconstruct full URIs
-            base = input_uri.rstrip("/")
-            discovered_files = [f"{base}/{f}" for f in matching]
-    else:
-        p = Path(input_uri)
-        if p.is_file():
-            discovered_files = [str(p.resolve())]
-        elif p.is_dir():
-            valid_exts = (".csv", ".parquet", ".pq")
-            files = [str(f.resolve()) for f in p.iterdir() if f.is_file() and f.name.lower().endswith(valid_exts)]
-            discovered_files = sorted(files)
-        else:
-            # File might not exist or be a glob
-            discovered_files = [str(p)]
+    if regions:
+        all_queries.extend(regions)
 
-    if not discovered_files:
-        raise ValueError(f"No valid input files found at '{input_uri}'")
+    if regions_file:
+        local_rf = uri_to_local_path(regions_file)
+        if local_rf is not None:
+            content = local_rf.read_text(encoding="utf-8")
+        else:
+            mgr = StorageManager.from_uri(str(regions_file))
+            content = mgr.read_bytes("").decode("utf-8")
+
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                all_queries.append(line)
+
+    if not all_queries:
+        raise ValueError("No regions provided. Specify --regions or --regions-file.")
+
+    matched_props = resolve_regions(all_queries, index=geofabrik_index)
+    if not matched_props:
+        raise ValueError(f"No regions could be resolved from queries: {all_queries}")
 
     tasks: list[dict[str, Any]] = []
-    task_id = 0
-    clean_out_prefix = output_prefix.rstrip("/")
+    clean_tile_uri = tile_storage_uri.rstrip("/") + "/"
 
-    # If single file and trip_col is provided, split by trip_ids
-    if len(discovered_files) == 1 and trip_col:
-        single_file = discovered_files[0]
-        df, _, _, _ = read_gps_csv(single_file)
-        if trip_col in df.columns:
-            unique_trips = df[trip_col].dropna().unique().tolist()
-            # Chunk unique trips by batch_size
-            for i in range(0, len(unique_trips), max(1, batch_size)):
-                trip_chunk = unique_trips[i : i + max(1, batch_size)]
-                task = {
-                    "task_id": task_id,
-                    "input_uri": single_file,
-                    "input_uris": [single_file],
-                    "trip_ids": trip_chunk,
-                    "trip_col": trip_col,
-                    "output_uri": f"{clean_out_prefix}/part_{task_id:05d}.{output_ext}",
-                    "costing": costing,
-                }
-                if tile_storage_uri:
-                    task["tile_storage_uri"] = tile_storage_uri
-                tasks.append(task)
-                task_id += 1
-
-    # Otherwise partition by files
-    if not tasks:
-        for i in range(0, len(discovered_files), max(1, batch_size)):
-            file_chunk = discovered_files[i : i + max(1, batch_size)]
-            task = {
-                "task_id": task_id,
-                "input_uri": file_chunk[0],
-                "input_uris": file_chunk,
-                "output_uri": f"{clean_out_prefix}/part_{task_id:05d}.{output_ext}",
-                "costing": costing,
-            }
-            if trip_col:
-                task["trip_col"] = trip_col
-            if tile_storage_uri:
-                task["tile_storage_uri"] = tile_storage_uri
-            tasks.append(task)
-            task_id += 1
+    for i, p in enumerate(matched_props):
+        pbf_url = p.get("urls", {}).get("pbf")
+        if not pbf_url:
+            continue
+        task = {
+            "task_id": i,
+            "task_type": "build_tiles",
+            "region": p.get("id"),
+            "region_name": p.get("name"),
+            "osm_url": pbf_url,
+            "tile_storage_uri": clean_tile_uri,
+        }
+        tasks.append(task)
 
     # Serialize manifest to JSONL
     manifest_lines = [json.dumps(t) for t in tasks]
@@ -133,40 +150,23 @@ def run_worker(
     manifest_uri: str,
     task_index: int | None = None,
     tile_storage_uri: str | None = None,
-    tile_cache_dir: str | Path = "valhalla_tiles_cache",
-    costing: str = "auto",
-    utm_crs: str = "EPSG:32632",
-    crossing_buffer_meters: float = 10.0,
-    intersection_buffer_meters: float = 10.0,
-    roundabout_buffer_meters: float = 10.0,
-    trip_col: str | None = None,
-    lat_col: str | None = None,
-    lon_col: str | None = None,
-    auto_build_tiles: bool = True,
-    osm_pbf: str | None = None,
-    osm_url: str | None = None,
-    region: str | None = None,
-) -> pd.DataFrame:
+    temp_dir: str | Path | None = None,
+    keep_temp: bool = False,
+    verbose: bool = True,
+) -> dict[str, Any]:
     """
-    Execute a single task from the manifest corresponding to task_index (or $JOB_COMPLETION_INDEX).
+    Execute a single tile-building task from the manifest corresponding to task_index (or $JOB_COMPLETION_INDEX).
 
     Args:
-        manifest_uri: Destination URI or path to the JSONL manifest file.
+        manifest_uri: URI or path to the task manifest JSONL file.
         task_index: Zero-indexed integer task number. If None, read from JOB_COMPLETION_INDEX env var.
-        tile_storage_uri: Remote blob URI containing Valhalla .gph tiles.
-        tile_cache_dir: Local path to cache Valhalla tiles.
-        costing: Valhalla costing model.
-        utm_crs: Coordinate reference system for UTM projection.
-        crossing_buffer_meters: Search radius around OSM crossings.
-        intersection_buffer_meters: Search radius around intersections.
-        roundabout_buffer_meters: Search radius around roundabouts.
-        trip_col: Trip column name override.
-        lat_col: Latitude column name override.
-        lon_col: Longitude column name override.
-        auto_build_tiles: Enable auto OSM download if tiles are missing.
+        tile_storage_uri: Optional override for destination blob storage prefix.
+        temp_dir: Optional custom temporary working directory.
+        keep_temp: If True, does not delete temporary download/build directory upon completion.
+        verbose: Print progress.
 
     Returns:
-        The enriched pandas DataFrame for this task.
+        Summary dict containing task details and count of uploaded tiles.
     """
     if task_index is None:
         env_val = (
@@ -198,76 +198,90 @@ def run_worker(
         )
 
     task = json.loads(lines[task_index])
-    print(f"[ValhallaRoute Worker {task_index}] Loaded task: {task}")
+    region = task.get("region", f"task_{task_index}")
+    osm_url = task.get("osm_url")
+    effective_storage_uri = tile_storage_uri or task.get("tile_storage_uri")
 
-    # Read input data
-    input_uris = task.get("input_uris") or task.get("input_uri")
-    if not input_uris:
-        raise ValueError(f"Task {task_index} has no input_uri or input_uris specified.")
+    if not osm_url:
+        raise ValueError(f"Task {task_index} for region '{region}' does not contain 'osm_url'.")
 
-    if isinstance(input_uris, str):
-        input_list = [input_uris]
-    else:
-        input_list = list(input_uris)
+    print(f"[ValhallaRoute Worker {task_index}] Starting tile generation for region: {region} ({osm_url})")
 
-    dfs: list[pd.DataFrame] = []
-    for u in input_list:
-        part_df, _, _, _ = read_gps_csv(u)
-        dfs.append(part_df)
-    df = pd.concat(dfs, ignore_index=True)
+    # Set up temporary working directory
+    base_tmp = Path(temp_dir) if temp_dir else Path(tempfile.gettempdir())
+    work_dir = base_tmp / f"valhalla_worker_{task_index}_{region}"
+    work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Filter trips if specified
-    assigned_trips = task.get("trip_ids")
-    eff_trip_col = task.get("trip_col") or trip_col
-    if assigned_trips and eff_trip_col:
-        if eff_trip_col in df.columns:
-            df = df[df[eff_trip_col].isin(assigned_trips)].copy()
+    pbf_dest = work_dir / f"{region}.osm.pbf"
+    tiles_dir = work_dir / "tiles"
+    tar_dest = work_dir / f"{region}_tiles.tar"
 
-    if df.empty:
-        print(f"[ValhallaRoute Worker {task_index}] Warning: Input data is empty after filtering.")
-        return df
+    try:
+        t0 = time.time()
+        # 1. Download PBF
+        if verbose:
+            print(f"[ValhallaRoute Worker {task_index}] Downloading {osm_url}...")
+        download_file(url=osm_url, dest_path=pbf_dest, verbose=verbose)
+        t_download = time.time() - t0
 
-    eff_tile_uri = task.get("tile_storage_uri") or tile_storage_uri
-    eff_costing = task.get("costing") or costing
-
-    enriched_df = enrich_gps_points(
-        csv_input=df,
-        tile_storage_uri=eff_tile_uri,
-        tile_cache_dir=tile_cache_dir,
-        costing=eff_costing,
-        lat_col=lat_col,
-        lon_col=lon_col,
-        trip_col=eff_trip_col,
-        utm_crs=utm_crs,
-        crossing_buffer_meters=crossing_buffer_meters,
-        intersection_buffer_meters=intersection_buffer_meters,
-        roundabout_buffer_meters=roundabout_buffer_meters,
-        auto_build_tiles=auto_build_tiles,
-        osm_pbf=osm_pbf,
-        osm_url=osm_url,
-        region=region,
-    )
-
-    # Write output
-    output_uri = task.get("output_uri")
-    if output_uri:
-        is_parquet = output_uri.lower().endswith((".parquet", ".pq"))
-        local_out = uri_to_local_path(output_uri)
-        if local_out is not None:
-            local_out.parent.mkdir(parents=True, exist_ok=True)
-            if is_parquet:
-                enriched_df.to_parquet(local_out, index=False)
-            else:
-                enriched_df.to_csv(local_out, index=False)
-        else:
-            out_mgr = StorageManager.from_uri(output_uri)
-            if is_parquet:
-                out_mgr.write_parquet(enriched_df, "", index=False)
-            else:
-                out_mgr.write_csv(enriched_df, "", index=False)
-
-        print(
-            f"[ValhallaRoute Worker {task_index}] Successfully wrote {len(enriched_df)} enriched points to {output_uri}"
+        # 2. Build Valhalla tiles
+        t1 = time.time()
+        if verbose:
+            print(f"[ValhallaRoute Worker {task_index}] Building tiles into {tiles_dir}...")
+        build_valhalla_tiles(
+            osm_pbf_path=pbf_dest,
+            tile_dir=tiles_dir,
+            tile_extract=tar_dest,
+            verbose=verbose,
         )
+        t_build = time.time() - t1
 
-    return enriched_df
+        # 3. Discover and upload all generated .gph files
+        gph_files = list(tiles_dir.rglob("*.gph"))
+        if verbose:
+            print(f"[ValhallaRoute Worker {task_index}] Generated {len(gph_files)} .gph tiles. Uploading to {effective_storage_uri}...")
+
+        t2 = time.time()
+        local_store_path = uri_to_local_path(effective_storage_uri)
+        if local_store_path is not None:
+            # Copy to local directory
+            for gph in gph_files:
+                rel = gph.relative_to(tiles_dir).as_posix()
+                dest = local_store_path / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(gph, dest)
+        else:
+            # Upload to remote cloud storage via StorageManager concurrently
+            out_mgr = StorageManager.from_uri(effective_storage_uri)
+
+            async def _upload_all():
+                async def _upload_one(gph: Path):
+                    rel = gph.relative_to(tiles_dir).as_posix()
+                    data = gph.read_bytes()
+                    await out_mgr.write_bytes_async(rel, data)
+
+                tasks_upload = [_upload_one(g) for g in gph_files]
+                await asyncio.gather(*tasks_upload)
+
+            asyncio.run(_upload_all())
+
+        t_upload = time.time() - t2
+        total_time = time.time() - t0
+
+        summary = {
+            "task_id": task_index,
+            "region": region,
+            "tiles_count": len(gph_files),
+            "download_time_s": round(t_download, 2),
+            "build_time_s": round(t_build, 2),
+            "upload_time_s": round(t_upload, 2),
+            "total_time_s": round(total_time, 2),
+        }
+        print(
+            f"[ValhallaRoute Worker {task_index}] Finished {region}: {len(gph_files)} tiles in {total_time:.1f}s "
+            f"(download: {t_download:.1f}s, build: {t_build:.1f}s, upload: {t_upload:.1f}s)"
+        )
+        return summary
+    finally:
+        if not keep_temp:
+            shutil.rmtree(work_dir, ignore_errors=True)

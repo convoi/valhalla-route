@@ -20,22 +20,16 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - "plan-batch"
-            - "--input"
-            - "s3://telematics-data/raw_trips/"
+            - "--regions"
+            - "germany/*"
             - "--manifest"
-            - "s3://telematics-data/manifests/job_tasks.jsonl"
-            - "--output-prefix"
-            - "s3://telematics-data/enriched_trips/"
-            - "--tile-storage-uri"
+            - "s3://valhalla-tiles/manifests/tiles_tasks.jsonl"
+            - "--output"
             - "s3://valhalla-tiles/global/"
-            - "--batch-size"
-            - "10"
-            - "--format"
-            - "parquet"
           resources:
             requests:
               cpu: "500m"
               memory: "1Gi"
             limits:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "2Gi"

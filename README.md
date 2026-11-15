@@ -175,31 +175,34 @@ valhallaroute input_trip.csv -o enriched_trip.csv --url http://localhost:8002
 
 ---
 
-## Cloud-Scale Batch Processing (Kubernetes Indexed Jobs)
+## Continental & Regional Batch Tile Generation (Kubernetes Indexed Jobs)
 
-ValhallaRoute supports two-stage distributed batch processing across S3, Google Cloud Storage, Azure Blob Storage, and local disks using `obstore`.
+ValhallaRoute supports two-stage distributed batch tile generation across S3, Google Cloud Storage, Azure Blob Storage, and local disks using `obstore`.
 
 ### Stage 1: Generate Task Manifest
-Partition a directory or dataset into tasks and write an indexed `manifest.jsonl`:
+Plan tile generation across multiple Geofabrik regions, subregions, or wildcards (`germany/*` expands to all 16 states):
 ```bash
+# Direct CLI regions:
 valhallaroute plan-batch \
-  -i s3://telematics/raw_trips/ \
-  -m s3://telematics/manifests/job_tasks.jsonl \
-  -o s3://telematics/enriched_trips/ \
-  --tile-storage-uri s3://valhalla-tiles/global/ \
-  --batch-size 10 \
-  --format parquet
+  --regions bayern berlin hamburg \
+  -m s3://valhalla-tiles/manifests/tiles_tasks.jsonl \
+  -o s3://valhalla-tiles/global/
+
+# Or via a regions text file (one region per line, # comments supported):
+valhallaroute plan-batch \
+  --regions-file regions.txt \
+  -m s3://valhalla-tiles/manifests/tiles_tasks.jsonl \
+  -o s3://valhalla-tiles/global/
 ```
 
 ### Stage 2: Run Worker
-Worker pods in a Kubernetes Indexed Job (`completionMode: Indexed`) execute their assigned slice mapped from `$JOB_COMPLETION_INDEX`:
+Worker pods in a Kubernetes Indexed Job (`completionMode: Indexed`) execute their assigned region mapped from `$JOB_COMPLETION_INDEX`:
 ```bash
 valhallaroute run-worker \
-  -m s3://telematics/manifests/job_tasks.jsonl \
-  --tile-cache-dir /mnt/tile-cache
+  -m s3://valhalla-tiles/manifests/tiles_tasks.jsonl
 ```
 
-Workers determine the minimal set of `.gph` tiles needed for the trip coordinates and fetch only missing tiles (~15–35 files / ~5–20 MB for a 100 km corridor) instead of downloading multi-gigabyte country archives.
+Workers download their assigned region's `.osm.pbf`, compile the Valhalla hierarchy graph tiles, and upload the generated `.gph` files to the shared global cloud prefix (`s3://valhalla-tiles/global/{level}/{...}.gph`).
 
 ---
 

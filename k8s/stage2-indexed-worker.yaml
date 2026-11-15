@@ -1,50 +1,39 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: valhallaroute-indexed-workers
+  name: valhallaroute-tile-workers
   labels:
     app.kubernetes.io/name: valhallaroute
-    app.kubernetes.io/component: indexed-worker
+    app.kubernetes.io/component: tile-worker
 spec:
   completionMode: Indexed
-  completions: 100               # Set to total tasks generated in manifest.jsonl
-  parallelism: 20                # Max concurrent worker pods
-  backoffLimit: 3
+  completions: 16                # Matches tasks generated in manifest.jsonl
+  parallelism: 8                 # Max concurrent worker pods
+  backoffLimit: 2
   template:
     metadata:
       labels:
         app.kubernetes.io/name: valhallaroute
-        app.kubernetes.io/component: indexed-worker
+        app.kubernetes.io/component: tile-worker
     spec:
       restartPolicy: OnFailure
-      volumes:
-        - name: tile-cache
-          emptyDir:
-            medium: Memory      # Fast in-memory tmpfs cache for sparse .gph tiles
-            sizeLimit: 1Gi
       containers:
-        - name: enricher
+        - name: tile-builder
           image: ghcr.io/valhallaroute:v0.4.0
           imagePullPolicy: IfNotPresent
           args:
             - "run-worker"
             - "--manifest"
-            - "s3://telematics-data/manifests/job_tasks.jsonl"
-            - "--tile-cache-dir"
-            - "/mnt/tile-cache"
+            - "s3://valhalla-tiles/manifests/tiles_tasks.jsonl"
           env:
-            # Kubernetes automatically injects the zero-indexed completion index into this env var
             - name: JOB_COMPLETION_INDEX
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
-          volumeMounts:
-            - name: tile-cache
-              mountPath: /mnt/tile-cache
           resources:
             requests:
-              cpu: "2"
-              memory: "4Gi"
-            limits:
               cpu: "4"
               memory: "8Gi"
+            limits:
+              cpu: "8"
+              memory: "16Gi"
