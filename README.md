@@ -256,44 +256,58 @@ az identity federated-credential create \
 
 ---
 
-### Helm Chart Deployment (`charts/valhallaroute`)
+### Pipeline Orchestration (Airflow / Dagster / Kubernetes)
 
-A production-ready Helm chart is provided in [`charts/valhallaroute`](file:///C:/Users/jhees/PycharmProjects/ValhallaRoute/charts/valhallaroute).
+Because batch tile generation uses dynamic task balancing (auto-subdivision of mega-regions and bin-packing of micro-regions), the exact number of worker tasks is determined at runtime by the planner.
 
-#### 1. Install via Helm with Azure Workload Identity:
-```bash
-helm install valhallaroute ./charts/valhallaroute \
-  --set azure.storageAccountName="<STORAGE_ACCOUNT>" \
-  --set azure.container="valhalla-tiles" \
-  --set azure.workloadIdentity.clientId="$USER_ASSIGNED_CLIENT_ID" \
-  --set serviceAccount.name="valhallaroute"
+The recommended orchestration pattern is a two-stage fan-out DAG managed by Airflow, Dagster, Argo Workflows, or a Python script:
+
+1. **Stage 1 (Admin & Planning):**
+   Run `valhallaroute build-admin` (optional, e.g. monthly) and `valhallaroute plan-batch` to output a balanced `manifest.jsonl` to cloud storage.
+2. **Stage 2 (Dynamic Fan-out / Workers):**
+   The orchestrator reads the manifest line count $N$ and dynamically dispatches $N$ worker tasks (e.g., via Airflow Dynamic Task Mapping, Dagster Dynamic Partitions, or submitting a Kubernetes Indexed Job with `completions: N, parallelism: P`).
+
+#### Example: Dynamic Kubernetes Indexed Job Submission
+```python
+from kubernetes import client, config
+import smart_open
+
+# 1. Read task count directly from the generated manifest
+with smart_open.open("s3://valhalla-tiles/manifests/europe.jsonl", "r") as f:
+    task_count = sum(1 for line in f if line.strip())
+
+# 2. Programmatically launch Kubernetes Indexed Job with exact completions
+job = {
+    "apiVersion": "batch/v1",
+    "kind": "Job",
+    "metadata": {"name": "valhalla-workers-batch"},
+    "spec": {
+        "completionMode": "Indexed",
+        "completions": task_count,  # Exact number of balanced tasks!
+        "parallelism": 16,          # Max concurrent worker pods
+        "template": {
+            "spec": {
+                "restartPolicy": "Never",
+                "containers": [{
+                    "name": "worker",
+                    "image": "ghcr.io/valhallaroute:latest",
+                    "command": [
+                        "valhallaroute", "run-worker",
+                        "-m", "s3://valhalla-tiles/manifests/europe.jsonl",
+                        "--admin-db-uri", "s3://valhalla-tiles/admin.sqlite"
+                    ],
+                    "resources": {
+                        "requests": {"cpu": "8", "memory": "16Gi"},
+                        "limits": {"cpu": "8", "memory": "16Gi"}
+                    }
+                }]
+            }
+        }
+    }
+}
+config.load_kube_config()
+client.BatchV1Api().create_namespaced_job(namespace="default", body=job)
 ```
-
-#### 2. Customizing Regions and Parallelism:
-```bash
-helm install valhallaroute ./charts/valhallaroute \
-  --set azure.storageAccountName="<STORAGE_ACCOUNT>" \
-  --set azure.workloadIdentity.clientId="$USER_ASSIGNED_CLIENT_ID" \
-  --set planner.regions="{bayern,berlin,hamburg}" \
-  --set worker.completions=3 \
-  --set worker.parallelism=3
-```
-
-#### 3. Helm Values Reference (`values.yaml`):
-| Value | Description | Default |
-| :--- | :--- | :--- |
-| `azure.storageAccountName` | Azure Storage Account name | `"valhallastorage"` |
-| `azure.container` | Target blob container | `"valhalla-tiles"` |
-| `azure.workloadIdentity.enabled` | Enable Azure Workload Identity | `true` |
-| `azure.workloadIdentity.clientId` | User-Assigned Managed Identity Client ID | `""` |
-| `serviceAccount.create` | Create annotated ServiceAccount | `true` |
-| `planner.regions` | Regions / wildcard expressions (`germany/*`) | `["germany/*"]` |
-| `planner.manifestUri` | Destination manifest JSONL path | `azure://valhalla-tiles/manifests/tiles_tasks.jsonl` |
-| `worker.completions` | Number of tasks in the manifest to execute | `16` |
-| `worker.parallelism` | Maximum concurrent worker pods | `4` |
-| `worker.resources.requests` | Worker CPU / Memory request (Guaranteed QoS) | `cpu: 8`, `memory: 16Gi` |
-| `worker.resources.limits` | Worker CPU / Memory limit (Guaranteed QoS) | `cpu: 8`, `memory: 16Gi` |
-
 ---
 
 ### Worker Hardware & Pod Resource Sizing Guide
