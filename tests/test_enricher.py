@@ -84,6 +84,8 @@ def test_enrich_with_mock_backend():
     assert len(res_df) == 3
     # Check column existence
     assert "valhalla_type" in res_df.columns
+    assert "is_on_ramp" in res_df.columns
+    assert "is_exit_ramp" in res_df.columns
     assert "is_tunnel" in res_df.columns
     assert "is_bridge" in res_df.columns
     assert "is_crossing" in res_df.columns
@@ -106,6 +108,8 @@ def test_enrich_with_mock_backend():
 
     # Point 0: Tunnel
     assert res_df.loc[0, "valhalla_type"] == "matched"
+    assert bool(res_df.loc[0, "is_on_ramp"]) is False
+    assert bool(res_df.loc[0, "is_exit_ramp"]) is False
     assert bool(res_df.loc[0, "is_tunnel"]) is True
     assert bool(res_df.loc[0, "is_bridge"]) is False
     assert bool(res_df.loc[0, "is_crossing"]) is False
@@ -115,6 +119,8 @@ def test_enrich_with_mock_backend():
 
     # Point 1: Bridge & border crossing
     assert res_df.loc[1, "valhalla_type"] == "matched"
+    assert bool(res_df.loc[1, "is_on_ramp"]) is False
+    assert bool(res_df.loc[1, "is_exit_ramp"]) is False
     assert bool(res_df.loc[1, "is_tunnel"]) is False
     assert bool(res_df.loc[1, "is_bridge"]) is True
     assert bool(res_df.loc[1, "is_crossing"]) is True
@@ -124,6 +130,8 @@ def test_enrich_with_mock_backend():
 
     # Point 2: Unmatched
     assert res_df.loc[2, "valhalla_type"] == "unmatched"
+    assert bool(res_df.loc[2, "is_on_ramp"]) is False
+    assert bool(res_df.loc[2, "is_exit_ramp"]) is False
     assert bool(res_df.loc[2, "is_tunnel"]) is False
     assert bool(res_df.loc[2, "is_bridge"]) is False
     assert bool(res_df.loc[2, "is_crossing"]) is False
@@ -139,6 +147,8 @@ def test_empty_dataframe():
     res = enrich_gps_points(empty_df, backend=MockBackend({}))
     assert len(res) == 0
     assert "valhalla_type" in res.columns
+    assert "is_on_ramp" in res.columns
+    assert "is_exit_ramp" in res.columns
     assert "is_tunnel" in res.columns
     assert "is_bridge" in res.columns
     assert "is_crossing" in res.columns
@@ -355,4 +365,45 @@ def test_interpolated_points_treatment():
     # Point 2: Unmatched
     assert res.loc[2, "valhalla_type"] == "unmatched"
     assert pd.isna(res.loc[2, "road_name"]) or res.loc[2, "road_name"] is None
+
+
+def test_on_ramp_and_exit_ramp_detection():
+    mock_resp = {
+        "admins": [{"country_text": "Germany"}],
+        "edges": [
+            # Edge 0: Secondary road
+            {"names": ["Langenforther Straße"], "road_class": "secondary", "use": "road", "length": 0.5},
+            # Edge 1: On-ramp connecting secondary -> motorway
+            {"road_class": "secondary", "use": "ramp", "length": 0.3},
+            # Edge 2: Motorway
+            {"names": ["A 2"], "road_class": "motorway", "use": "road", "length": 2.0},
+            # Edge 3: Exit-ramp connecting motorway -> secondary
+            {"road_class": "secondary", "use": "ramp", "length": 0.3},
+            # Edge 4: Secondary road
+            {"names": ["Weidetorkreisel"], "road_class": "secondary", "use": "road", "length": 0.4},
+        ],
+        "matched_points": [
+            # Point 0: On-ramp edge (edge 1)
+            {"type": "matched", "edge_index": 1, "distance_along_edge": 0.5},
+            # Point 1: Mainline motorway (edge 2)
+            {"type": "matched", "edge_index": 2, "distance_along_edge": 0.5},
+            # Point 2: Exit-ramp edge (edge 3)
+            {"type": "matched", "edge_index": 3, "distance_along_edge": 0.5},
+        ],
+    }
+    csv_data = "lat,lon\n52.426,9.776\n52.427,9.777\n52.428,9.778\n"
+    res = enrich_gps_points(io.StringIO(csv_data), backend=MockBackend(mock_resp))
+
+    # Point 0: On-ramp
+    assert bool(res.loc[0, "is_on_ramp"]) is True
+    assert bool(res.loc[0, "is_exit_ramp"]) is False
+
+    # Point 1: Mainline
+    assert bool(res.loc[1, "is_on_ramp"]) is False
+    assert bool(res.loc[1, "is_exit_ramp"]) is False
+
+    # Point 2: Exit-ramp
+    assert bool(res.loc[2, "is_on_ramp"]) is False
+    assert bool(res.loc[2, "is_exit_ramp"]) is True
+
 

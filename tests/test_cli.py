@@ -31,6 +31,8 @@ def test_cli_execution(tmp_path: Path):
     df = pd.read_csv(output_file)
     assert len(df) == 2
     assert "valhalla_type" in df.columns
+    assert "is_on_ramp" in df.columns
+    assert "is_exit_ramp" in df.columns
     assert "is_tunnel" in df.columns
     assert "is_bridge" in df.columns
     assert "is_crossing" in df.columns

@@ -17,6 +17,17 @@ LON_CANDIDATES = ("lon", "lng", "longitude", "long", "lon_deg", "x", "lon_dd", "
 TIME_CANDIDATES = ("time", "timestamp", "datetime", "date_time", "t", "epoch", "unixtime")
 TRIP_CANDIDATES = ("trip_id", "trip", "trajectory_id", "track_id")
 
+ROAD_CLASS_HIERARCHY = {
+    "motorway": 1,
+    "trunk": 2,
+    "primary": 3,
+    "secondary": 4,
+    "tertiary": 5,
+    "unclassified": 6,
+    "residential": 7,
+    "service_other": 8,
+}
+
 
 def _find_column(columns: Sequence[str], candidates: Sequence[str]) -> str | None:
     """Find a column matching one of the candidate names (case-insensitive)."""
@@ -139,6 +150,53 @@ def _process_trace_attributes_response(
     edges = response.get("edges", [])
     admins = response.get("admins", [])
 
+    # Pre-analyze ramp sequences in edges
+    # edge_ramp_info[edge_idx] = (ramp_mode: "on" | "exit" | "interchange" | "none", cum_dist_before: float, total_ramp_len: float)
+    edge_ramp_info: dict[int, tuple[str, float, float]] = {}
+    e_idx = 0
+    num_edges = len(edges)
+    while e_idx < num_edges:
+        if edges[e_idx].get("use") == "ramp":
+            start_r = e_idx
+            while e_idx < num_edges and edges[e_idx].get("use") == "ramp":
+                e_idx += 1
+            end_r = e_idx
+
+            prev_e = edges[start_r - 1] if start_r > 0 else None
+            next_e = edges[end_r] if end_r < num_edges else None
+
+            prev_rank = ROAD_CLASS_HIERARCHY.get(prev_e.get("road_class"), 9) if prev_e else 9
+            next_rank = ROAD_CLASS_HIERARCHY.get(next_e.get("road_class"), 9) if next_e else 9
+
+            total_ramp_len = sum(edges[k].get("length", 0.0) for k in range(start_r, end_r)) * 1000.0
+
+            if prev_rank > next_rank:
+                ramp_mode = "on"
+            elif prev_rank < next_rank:
+                ramp_mode = "exit"
+            elif prev_rank == next_rank and prev_rank <= 4:
+                ramp_mode = "interchange"
+            else:
+                has_exit_sign = any(
+                    bool(edges[k].get("sign") and any(sk in edges[k]["sign"] for sk in ("exit_number", "exit_toward", "exit_name", "exit_branch")))
+                    for k in range(start_r, end_r)
+                )
+                if has_exit_sign:
+                    ramp_mode = "exit"
+                elif prev_rank <= 3:
+                    ramp_mode = "exit"
+                elif next_rank <= 3:
+                    ramp_mode = "on"
+                else:
+                    ramp_mode = "none"
+
+            cum_dist = 0.0
+            for k in range(start_r, end_r):
+                edge_ramp_info[k] = (ramp_mode, cum_dist, total_ramp_len)
+                cum_dist += edges[k].get("length", 0.0) * 1000.0
+        else:
+            e_idx += 1
+
     results: list[dict[str, Any]] = []
 
     for i in range(num_points):
@@ -146,6 +204,8 @@ def _process_trace_attributes_response(
         pt_type = pt.get("type", "unmatched")
         edge_index = pt.get("edge_index")
 
+        is_on_ramp = False
+        is_exit_ramp = False
         is_tunnel = False
         is_bridge = False
         is_crossing = False
@@ -190,6 +250,20 @@ def _process_trace_attributes_response(
             dalong_ratio = pt.get("distance_along_edge", 0.0)
             d_from_begin = dalong_ratio * elen_m
             d_to_end = (1.0 - dalong_ratio) * elen_m
+
+            # On-ramp and exit-ramp classification
+            if edge_index in edge_ramp_info:
+                rmode, dist_offset, total_ramp_len = edge_ramp_info[edge_index]
+                if rmode == "on":
+                    is_on_ramp = True
+                elif rmode == "exit":
+                    is_exit_ramp = True
+                elif rmode == "interchange":
+                    pt_along_seq = dist_offset + d_from_begin
+                    if pt_along_seq < total_ramp_len / 2.0:
+                        is_exit_ramp = True
+                    else:
+                        is_on_ramp = True
 
             # Intersection and turn detection
             if d_to_end <= intersection_buffer_meters and "end_node" in edge:
@@ -268,6 +342,8 @@ def _process_trace_attributes_response(
 
         results.append({
             "valhalla_type": pt_type,
+            "is_on_ramp": is_on_ramp,
+            "is_exit_ramp": is_exit_ramp,
             "is_tunnel": is_tunnel,
             "is_bridge": is_bridge,
             "is_crossing": is_crossing,
@@ -325,6 +401,8 @@ def _execute_single_trace(
         return [
             {
                 "valhalla_type": "unmatched",
+                "is_on_ramp": False,
+                "is_exit_ramp": False,
                 "is_tunnel": False,
                 "is_bridge": False,
                 "is_crossing": False,
@@ -495,6 +573,8 @@ def enrich_gps_points(
         # Return empty dataframe with target columns
         res_df = df.copy()
         res_df["valhalla_type"] = pd.Series(dtype=str)
+        res_df["is_on_ramp"] = pd.Series(dtype=bool)
+        res_df["is_exit_ramp"] = pd.Series(dtype=bool)
         res_df["is_tunnel"] = pd.Series(dtype=bool)
         res_df["is_bridge"] = pd.Series(dtype=bool)
         res_df["is_crossing"] = pd.Series(dtype=bool)
@@ -555,6 +635,8 @@ def enrich_gps_points(
 
     default_attr = {
         "valhalla_type": "unmatched",
+        "is_on_ramp": False,
+        "is_exit_ramp": False,
         "is_tunnel": False,
         "is_bridge": False,
         "is_crossing": False,
@@ -687,6 +769,8 @@ def enrich_gps_points(
     # Construct output columns
     enriched_df = df.copy()
     enriched_df["valhalla_type"] = [r.get("valhalla_type", "unmatched") for r in matched_results]
+    enriched_df["is_on_ramp"] = [r["is_on_ramp"] for r in matched_results]
+    enriched_df["is_exit_ramp"] = [r["is_exit_ramp"] for r in matched_results]
     enriched_df["is_tunnel"] = [r["is_tunnel"] for r in matched_results]
     enriched_df["is_bridge"] = [r["is_bridge"] for r in matched_results]
     enriched_df["is_crossing"] = [r["is_crossing"] for r in matched_results]
