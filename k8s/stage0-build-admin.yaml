@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: valhallaroute-build-admin
+  labels:
+    app.kubernetes.io/name: valhallaroute
+    app.kubernetes.io/component: admin-builder
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: valhallaroute
+        app.kubernetes.io/component: admin-builder
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: valhallaroute
+      containers:
+        - name: admin-builder
+          image: ghcr.io/valhallaroute:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "build-admin"
+            # Target output SpatiaLite database in cloud storage or local path
+            - "-o"
+            - "azure://valhalla-tiles/admin.sqlite"
+            # Countries to compile (omit -c to build the entire planet)
+            - "-c"
+            - "DE"
+            - "FR"
+            - "NL"
+            - "BE"
+            - "LU"
+            # Administrative levels: 2 (country), 4 (state/province), 6 (county), 8 (municipality)
+            - "--admin-levels"
+            - "2,4"
+            # Overture Maps release version
+            # - "--release"
+            # - "2026-10-21.0"
+          env:
+            - name: AZURE_STORAGE_ACCOUNT_NAME
+              value: "valhallastorage"
+            # Public Overture GeoParquet AWS region
+            - name: AWS_REGION
+              value: "us-west-2"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
