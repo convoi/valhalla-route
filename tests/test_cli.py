@@ -40,5 +40,10 @@ def test_cli_execution(tmp_path: Path):
     assert "country" in df.columns
     assert "road_name" in df.columns
     assert "road_type" in df.columns
+    assert "distance_to_next_intersection" in df.columns
+    assert "intersection_edge_count" in df.columns
+    assert "has_stop_sign" in df.columns
+    assert "has_yield_sign" in df.columns
+    assert "curvature" in df.columns
     assert df.loc[0, "road_name"] == "Sample Road"
     assert df.loc[0, "valhalla_type"] == "matched"

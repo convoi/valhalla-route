@@ -223,6 +223,11 @@ def _process_trace_attributes_response(
         is_intersection = False
         intersection_type = None
         has_traffic_signal = False
+        has_stop_sign = False
+        has_yield_sign = False
+        intersection_edge_count = None
+        curvature = None
+        distance_to_next_intersection = None
         lane_count = None
         is_turn = False
         turn_direction = None
@@ -238,6 +243,16 @@ def _process_trace_attributes_response(
             edge = edges[edge_index]
             is_tunnel = bool(edge.get("tunnel", False))
             is_bridge = bool(edge.get("bridge", False))
+
+            # Curvature
+            if edge.get("curvature") is not None:
+                curvature = int(edge["curvature"])
+
+            # Stop and Yield signs on current edge
+            if edge.get("stop_sign"):
+                has_stop_sign = True
+            if edge.get("yield_sign"):
+                has_yield_sign = True
 
             # Crossing flag from Valhalla edge use or country crossing
             if edge.get("use") == "crossing":
@@ -260,6 +275,21 @@ def _process_trace_attributes_response(
             dalong_ratio = pt.get("distance_along_edge", 0.0)
             d_from_begin = dalong_ratio * elen_m
             d_to_end = (1.0 - dalong_ratio) * elen_m
+            distance_to_next_intersection = round(float(d_to_end), 1)
+
+            # Node metadata from upcoming end_node
+            if "end_node" in edge:
+                en = edge["end_node"]
+                if en.get("stop_sign") or en.get("type") == "stop_sign":
+                    has_stop_sign = True
+                if en.get("yield_sign") or en.get("type") in ("yield", "give_way"):
+                    has_yield_sign = True
+                if en.get("edge_count") is not None:
+                    intersection_edge_count = int(en["edge_count"])
+                elif "intersecting_edges" in en:
+                    branches = len(en.get("intersecting_edges", []))
+                    has_next = 1 if edge_index + 1 < len(edges) else 0
+                    intersection_edge_count = branches + 1 + has_next
 
             # On-ramp and exit-ramp classification
             if edge_index in edge_ramp_info:
@@ -282,6 +312,10 @@ def _process_trace_attributes_response(
                 intersection_type = en.get("type", "street_intersection")
                 if en.get("traffic_signal"):
                     has_traffic_signal = True
+                if en.get("stop_sign") or en.get("type") == "stop_sign":
+                    has_stop_sign = True
+                if en.get("yield_sign") or en.get("type") in ("yield", "give_way"):
+                    has_yield_sign = True
 
                 if edge_index + 1 < len(edges):
                     h_in = edge.get("end_heading")
@@ -298,6 +332,10 @@ def _process_trace_attributes_response(
                 intersection_type = bn.get("type", "street_intersection")
                 if bn.get("traffic_signal"):
                     has_traffic_signal = True
+                if bn.get("stop_sign") or bn.get("type") == "stop_sign":
+                    has_stop_sign = True
+                if bn.get("yield_sign") or bn.get("type") in ("yield", "give_way"):
+                    has_yield_sign = True
 
                 h_in = edges[edge_index - 1].get("end_heading")
                 h_out = edge.get("begin_heading")
@@ -360,7 +398,12 @@ def _process_trace_attributes_response(
             "crossing_type": crossing_type,
             "is_intersection": is_intersection,
             "intersection_type": intersection_type,
+            "distance_to_next_intersection": distance_to_next_intersection,
+            "intersection_edge_count": intersection_edge_count,
             "has_traffic_signal": has_traffic_signal,
+            "has_stop_sign": has_stop_sign,
+            "has_yield_sign": has_yield_sign,
+            "curvature": curvature,
             "lane_count": lane_count,
             "is_turn": is_turn,
             "turn_direction": turn_direction,
@@ -389,6 +432,10 @@ def _execute_single_trace(
         "shape": shape,
         "costing": costing,
         "shape_match": shape_match,
+        "filters": {
+            "attributes": [],
+            "action": "exclude",
+        },
     }
     try:
         resp = backend.trace_attributes(payload)
@@ -419,7 +466,12 @@ def _execute_single_trace(
                 "crossing_type": None,
                 "is_intersection": False,
                 "intersection_type": None,
+                "distance_to_next_intersection": None,
+                "intersection_edge_count": None,
                 "has_traffic_signal": False,
+                "has_stop_sign": False,
+                "has_yield_sign": False,
+                "curvature": None,
                 "lane_count": None,
                 "is_turn": False,
                 "turn_direction": None,
@@ -531,7 +583,12 @@ def enrich_gps_points(
         - crossing_type (str or None)
         - is_intersection (bool)
         - intersection_type (str or None)
+        - distance_to_next_intersection (float or None)
+        - intersection_edge_count (int or None)
         - has_traffic_signal (bool)
+        - has_stop_sign (bool)
+        - has_yield_sign (bool)
+        - curvature (int or None)
         - lane_count (int or None)
         - is_turn (bool)
         - turn_direction (str or None)
@@ -593,7 +650,12 @@ def enrich_gps_points(
         res_df["crossing_type"] = pd.Series(dtype=str)
         res_df["is_intersection"] = pd.Series(dtype=bool)
         res_df["intersection_type"] = pd.Series(dtype=str)
+        res_df["distance_to_next_intersection"] = pd.Series(dtype=float)
+        res_df["intersection_edge_count"] = pd.Series(dtype="Int64")
         res_df["has_traffic_signal"] = pd.Series(dtype=bool)
+        res_df["has_stop_sign"] = pd.Series(dtype=bool)
+        res_df["has_yield_sign"] = pd.Series(dtype=bool)
+        res_df["curvature"] = pd.Series(dtype="Int64")
         res_df["lane_count"] = pd.Series(dtype="Int64")
         res_df["is_turn"] = pd.Series(dtype=bool)
         res_df["turn_direction"] = pd.Series(dtype=str)
@@ -673,7 +735,12 @@ def enrich_gps_points(
         "crossing_type": None,
         "is_intersection": False,
         "intersection_type": None,
+        "distance_to_next_intersection": None,
+        "intersection_edge_count": None,
         "has_traffic_signal": False,
+        "has_stop_sign": False,
+        "has_yield_sign": False,
+        "curvature": None,
         "lane_count": None,
         "is_turn": False,
         "turn_direction": None,
@@ -807,7 +874,12 @@ def enrich_gps_points(
     enriched_df["crossing_type"] = [r["crossing_type"] for r in matched_results]
     enriched_df["is_intersection"] = [r["is_intersection"] for r in matched_results]
     enriched_df["intersection_type"] = [r["intersection_type"] for r in matched_results]
+    enriched_df["distance_to_next_intersection"] = [r.get("distance_to_next_intersection") for r in matched_results]
+    enriched_df["intersection_edge_count"] = [r.get("intersection_edge_count") for r in matched_results]
     enriched_df["has_traffic_signal"] = [r["has_traffic_signal"] for r in matched_results]
+    enriched_df["has_stop_sign"] = [r.get("has_stop_sign", False) for r in matched_results]
+    enriched_df["has_yield_sign"] = [r.get("has_yield_sign", False) for r in matched_results]
+    enriched_df["curvature"] = [r.get("curvature") for r in matched_results]
     enriched_df["lane_count"] = [r["lane_count"] for r in matched_results]
     enriched_df["is_turn"] = [r["is_turn"] for r in matched_results]
     enriched_df["turn_direction"] = [r["turn_direction"] for r in matched_results]

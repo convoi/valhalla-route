@@ -92,7 +92,12 @@ def test_enrich_with_mock_backend():
     assert "crossing_type" in res_df.columns
     assert "is_intersection" in res_df.columns
     assert "intersection_type" in res_df.columns
+    assert "distance_to_next_intersection" in res_df.columns
+    assert "intersection_edge_count" in res_df.columns
     assert "has_traffic_signal" in res_df.columns
+    assert "has_stop_sign" in res_df.columns
+    assert "has_yield_sign" in res_df.columns
+    assert "curvature" in res_df.columns
     assert "lane_count" in res_df.columns
     assert "is_turn" in res_df.columns
     assert "turn_direction" in res_df.columns
@@ -405,5 +410,82 @@ def test_on_ramp_and_exit_ramp_detection():
     # Point 2: Exit-ramp
     assert bool(res.loc[2, "is_on_ramp"]) is False
     assert bool(res.loc[2, "is_exit_ramp"]) is True
+
+
+def test_intersection_stop_yield_curvature_attributes():
+    mock_resp = {
+        "admins": [{"country_text": "Germany"}],
+        "edges": [
+            # Edge 0: 200m long, curvature 6, 4-way intersection ahead with stop sign
+            {
+                "names": ["Hauptstraße"],
+                "road_class": "primary",
+                "length": 0.2,  # 200 meters
+                "curvature": 6,
+                "stop_sign": True,
+                "end_node": {
+                    "type": "street_intersection",
+                    "stop_sign": True,
+                    "intersecting_edges": [
+                        {"begin_heading": 90},
+                        {"begin_heading": 270},
+                    ],
+                },
+            },
+            # Edge 1: 100m long, curvature 0, 3-way intersection ahead with yield sign
+            {
+                "names": ["Nebenweg"],
+                "road_class": "secondary",
+                "length": 0.1,  # 100 meters
+                "curvature": 0,
+                "yield_sign": True,
+                "end_node": {
+                    "type": "street_intersection",
+                    "yield_sign": True,
+                    "intersecting_edges": [
+                        {"begin_heading": 45},
+                    ],
+                },
+            },
+        ],
+        "matched_points": [
+            # Point 0: 80% along Edge 0 -> distance to next intersection = (1 - 0.8) * 200m = 40.0m
+            {"type": "matched", "edge_index": 0, "distance_along_edge": 0.8},
+            # Point 1: 90% along Edge 1 -> distance to next intersection = (1 - 0.9) * 100m = 10.0m
+            {"type": "matched", "edge_index": 1, "distance_along_edge": 0.9},
+            # Point 2: Unmatched
+            {"type": "unmatched"},
+        ],
+    }
+
+    csv_data = "lat,lon\n52.52,13.40\n52.53,13.41\n52.54,13.42\n"
+    res = enrich_gps_points(io.StringIO(csv_data), backend=MockBackend(mock_resp))
+
+    # Point 0: Approaching 4-way stop intersection
+    assert res.loc[0, "valhalla_type"] == "matched"
+    assert res.loc[0, "curvature"] == 6
+    assert bool(res.loc[0, "has_stop_sign"]) is True
+    assert bool(res.loc[0, "has_yield_sign"]) is False
+    assert res.loc[0, "distance_to_next_intersection"] == 40.0
+    # 2 intersecting branches + 1 incoming + 1 outgoing = 4
+    assert res.loc[0, "intersection_edge_count"] == 4
+
+    # Point 1: Approaching 3-way yield intersection
+    assert res.loc[1, "valhalla_type"] == "matched"
+    assert res.loc[1, "curvature"] == 0
+    assert bool(res.loc[1, "has_stop_sign"]) is False
+    assert bool(res.loc[1, "has_yield_sign"]) is True
+    assert res.loc[1, "distance_to_next_intersection"] == 10.0
+    # 1 intersecting branch + 1 incoming = 2 (end of route)
+    assert res.loc[1, "intersection_edge_count"] == 2
+
+    # Point 2: Unmatched defaults
+    assert res.loc[2, "valhalla_type"] == "unmatched"
+    assert pd.isna(res.loc[2, "curvature"]) or res.loc[2, "curvature"] is None
+    assert bool(res.loc[2, "has_stop_sign"]) is False
+    assert bool(res.loc[2, "has_yield_sign"]) is False
+    assert pd.isna(res.loc[2, "distance_to_next_intersection"]) or res.loc[2, "distance_to_next_intersection"] is None
+    assert pd.isna(res.loc[2, "intersection_edge_count"]) or res.loc[2, "intersection_edge_count"] is None
+
 
 
