@@ -1,5 +1,5 @@
 """ValhallaRoute: GPS trip route enrichment using Valhalla."""
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from .client import ActorBackend, HttpBackend, ValhallaBackend, resolve_backend
 from .crossings import CrossingIndexer

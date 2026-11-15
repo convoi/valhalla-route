@@ -1,3 +1,4 @@
 version,timestamp_utc,dataset,rows,trips,total_pipeline_time_s,throughput_pts_per_s,throughput_trips_per_s,csv_read_utm_s,crossing_query_s,reverse_geocode_s
 0.1.0,2026-11-15T13:05:47Z,hannover_table.csv,617086,1176,59.59,10356.2,19.7,0.2189,0.3914,8.7033
 0.2.0,2026-11-15T13:28:52Z,hannover_table.csv,617086,1176,70.967,8695.4,16.57,0.2536,0.406,9.5193
+0.2.1,2026-11-15T13:55:08Z,hannover_table.csv,617086,1176,70.5507,8746.7,16.67,0.2296,0.4033,9.403

@@ -83,6 +83,7 @@ def test_enrich_with_mock_backend():
 
     assert len(res_df) == 3
     # Check column existence
+    assert "valhalla_type" in res_df.columns
     assert "is_tunnel" in res_df.columns
     assert "is_bridge" in res_df.columns
     assert "is_crossing" in res_df.columns
@@ -104,6 +105,7 @@ def test_enrich_with_mock_backend():
     assert "road type" not in res_df.columns
 
     # Point 0: Tunnel
+    assert res_df.loc[0, "valhalla_type"] == "matched"
     assert bool(res_df.loc[0, "is_tunnel"]) is True
     assert bool(res_df.loc[0, "is_bridge"]) is False
     assert bool(res_df.loc[0, "is_crossing"]) is False
@@ -112,6 +114,7 @@ def test_enrich_with_mock_backend():
     assert res_df.loc[0, "country"] == "Germany"
 
     # Point 1: Bridge & border crossing
+    assert res_df.loc[1, "valhalla_type"] == "matched"
     assert bool(res_df.loc[1, "is_tunnel"]) is False
     assert bool(res_df.loc[1, "is_bridge"]) is True
     assert bool(res_df.loc[1, "is_crossing"]) is True
@@ -120,6 +123,7 @@ def test_enrich_with_mock_backend():
     assert res_df.loc[1, "road_type"] == "primary"
 
     # Point 2: Unmatched
+    assert res_df.loc[2, "valhalla_type"] == "unmatched"
     assert bool(res_df.loc[2, "is_tunnel"]) is False
     assert bool(res_df.loc[2, "is_bridge"]) is False
     assert bool(res_df.loc[2, "is_crossing"]) is False
@@ -134,6 +138,7 @@ def test_empty_dataframe():
     empty_df = pd.DataFrame(columns=["lat", "lon"])
     res = enrich_gps_points(empty_df, backend=MockBackend({}))
     assert len(res) == 0
+    assert "valhalla_type" in res.columns
     assert "is_tunnel" in res.columns
     assert "is_bridge" in res.columns
     assert "is_crossing" in res.columns
@@ -313,3 +318,41 @@ def test_roundabout_and_turn_detection():
     # Pt 2
     assert bool(res.loc[2, "is_roundabout"]) is True
     assert res.loc[2, "roundabout_action"] == "exiting"
+
+
+def test_interpolated_points_treatment():
+    mock_resp = {
+        "admins": [{"country_text": "Germany"}],
+        "edges": [
+            {
+                "names": ["Kurt-Schumacher-Allee"],
+                "road_class": "residential",
+                "lane_count": 2,
+                "length": 0.2,
+            }
+        ],
+        "matched_points": [
+            {"type": "matched", "edge_index": 0, "distance_along_edge": 0.2},
+            {"type": "interpolated", "edge_index": 0, "distance_along_edge": 0.5},
+            {"type": "unmatched"},
+        ],
+    }
+    csv_data = "lat,lon\n52.4339,9.7480\n52.4338,9.7481\n52.4337,9.7482\n"
+    res = enrich_gps_points(io.StringIO(csv_data), backend=MockBackend(mock_resp))
+
+    # Point 0: Matched
+    assert res.loc[0, "valhalla_type"] == "matched"
+    assert res.loc[0, "road_name"] == "Kurt-Schumacher-Allee"
+    assert res.loc[0, "road_type"] == "residential"
+    assert res.loc[0, "lane_count"] == 2
+
+    # Point 1: Interpolated - must receive the same road attributes as matched
+    assert res.loc[1, "valhalla_type"] == "interpolated"
+    assert res.loc[1, "road_name"] == "Kurt-Schumacher-Allee"
+    assert res.loc[1, "road_type"] == "residential"
+    assert res.loc[1, "lane_count"] == 2
+
+    # Point 2: Unmatched
+    assert res.loc[2, "valhalla_type"] == "unmatched"
+    assert pd.isna(res.loc[2, "road_name"]) or res.loc[2, "road_name"] is None
+

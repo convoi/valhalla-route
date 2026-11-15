@@ -164,7 +164,7 @@ def _process_trace_attributes_response(
         country = None
         city = None
 
-        if pt_type == "matched" and edge_index is not None and 0 <= edge_index < len(edges):
+        if pt_type in ("matched", "interpolated") and edge_index is not None and 0 <= edge_index < len(edges):
             edge = edges[edge_index]
             is_tunnel = bool(edge.get("tunnel", False))
             is_bridge = bool(edge.get("bridge", False))
@@ -267,6 +267,7 @@ def _process_trace_attributes_response(
                     city = c_city
 
         results.append({
+            "valhalla_type": pt_type,
             "is_tunnel": is_tunnel,
             "is_bridge": is_bridge,
             "is_crossing": is_crossing,
@@ -323,6 +324,7 @@ def _execute_single_trace(
         # If both fail, return unmatched defaults
         return [
             {
+                "valhalla_type": "unmatched",
                 "is_tunnel": False,
                 "is_bridge": False,
                 "is_crossing": False,
@@ -492,6 +494,7 @@ def enrich_gps_points(
     if df.empty:
         # Return empty dataframe with target columns
         res_df = df.copy()
+        res_df["valhalla_type"] = pd.Series(dtype=str)
         res_df["is_tunnel"] = pd.Series(dtype=bool)
         res_df["is_bridge"] = pd.Series(dtype=bool)
         res_df["is_crossing"] = pd.Series(dtype=bool)
@@ -551,6 +554,7 @@ def enrich_gps_points(
     actual_trip_col = trip_col or _find_column(df.columns, TRIP_CANDIDATES)
 
     default_attr = {
+        "valhalla_type": "unmatched",
         "is_tunnel": False,
         "is_bridge": False,
         "is_crossing": False,
@@ -682,6 +686,7 @@ def enrich_gps_points(
 
     # Construct output columns
     enriched_df = df.copy()
+    enriched_df["valhalla_type"] = [r.get("valhalla_type", "unmatched") for r in matched_results]
     enriched_df["is_tunnel"] = [r["is_tunnel"] for r in matched_results]
     enriched_df["is_bridge"] = [r["is_bridge"] for r in matched_results]
     enriched_df["is_crossing"] = [r["is_crossing"] for r in matched_results]
