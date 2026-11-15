@@ -390,6 +390,16 @@ def build_valhalla_tiles(
             f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
         )
 
+    # 2b. Extract companion feature tiles (stops, yields, signals, crossings)
+    try:
+        from .features import extract_traffic_features_from_pbf
+
+        for pbf_path in pbf_list:
+            if pbf_path.exists():
+                extract_traffic_features_from_pbf(pbf_path, tile_dir=t_dir, level=2, verbose=verbose)
+    except Exception as feat_err:
+        LOGGER.warning(f"Companion feature tile extraction skipped or failed: {feat_err}")
+
     # 3. Consolidate tiles into a .tar extract with index.bin
     if verbose:
         print(f"Creating tile extract archive {t_extract}...")

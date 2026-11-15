@@ -500,32 +500,35 @@ def run_worker(
         )
         t_build = time.time() - t1
 
-        # 4. Discover and upload all generated .gph files
+        # 4. Discover and upload all generated .gph files and companion .features.parquet files
         gph_files = list(tiles_dir.rglob("*.gph"))
+        feat_files = list(tiles_dir.rglob("*.features.parquet"))
+        all_upload_files = gph_files + feat_files
         if verbose:
             print(
-                f"[ValhallaRoute Worker {task_index}] Generated {len(gph_files)} .gph tiles. "
+                f"[ValhallaRoute Worker {task_index}] Generated {len(gph_files)} .gph tiles and "
+                f"{len(feat_files)} companion .features.parquet files. "
                 f"Uploading to {effective_storage_uri}..."
             )
 
         t2 = time.time()
         local_store_path = uri_to_local_path(effective_storage_uri)
         if local_store_path is not None:
-            for gph in gph_files:
-                rel = gph.relative_to(tiles_dir).as_posix()
+            for fpath in all_upload_files:
+                rel = fpath.relative_to(tiles_dir).as_posix()
                 dest = local_store_path / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(gph, dest)
+                shutil.copy2(fpath, dest)
         else:
             out_mgr = StorageManager.from_uri(effective_storage_uri)
 
             async def _upload_all():
-                async def _upload_one(gph: Path):
-                    rel = gph.relative_to(tiles_dir).as_posix()
-                    data = gph.read_bytes()
+                async def _upload_one(fpath: Path):
+                    rel = fpath.relative_to(tiles_dir).as_posix()
+                    data = fpath.read_bytes()
                     await out_mgr.write_bytes_async(rel, data)
 
-                tasks_upload = [_upload_one(g) for g in gph_files]
+                tasks_upload = [_upload_one(f) for f in all_upload_files]
                 await asyncio.gather(*tasks_upload)
 
             asyncio.run(_upload_all())

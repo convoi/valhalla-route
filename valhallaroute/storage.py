@@ -39,6 +39,12 @@ def get_valhalla_tile_relative_path(tile_id: int, level: int) -> str:
     raise ValueError(f"Invalid Valhalla hierarchy level: {level}")
 
 
+def get_feature_tile_relative_path(tile_id: int, level: int = 2) -> str:
+    """Return the relative path for a companion feature tile (default level 2)."""
+    rel = get_valhalla_tile_relative_path(tile_id, level)
+    return rel[:-4] + ".features.parquet"
+
+
 def get_tiles_for_bbox(
     min_lat: float,
     min_lon: float,
@@ -228,11 +234,12 @@ class StorageManager:
         local_cache_dir: Path | str,
         levels: Sequence[int] = (0, 1, 2),
         buffer_degrees: float = 0.05,
+        include_features: bool = True,
         verbose: bool = False,
     ) -> list[Path]:
         """
         Ensure all Valhalla tiles covering the trajectory bounding box exist in local_cache_dir.
-        Downloads missing .gph files from remote blob storage on demand.
+        Downloads missing .gph files and companion .features.parquet files from remote blob storage on demand.
 
         Args:
             lats: Sequence of latitude coordinates.
@@ -240,6 +247,7 @@ class StorageManager:
             local_cache_dir: Local directory serving as Valhalla's tile_dir.
             levels: Valhalla hierarchy levels (default: 0, 1, 2).
             buffer_degrees: Padding around bounding box.
+            include_features: Also fetch companion .features.parquet files for Level-2 tiles.
             verbose: If True, prints download progress.
 
         Returns:
@@ -268,18 +276,26 @@ class StorageManager:
         downloaded_paths: list[Path] = []
         missing_rel_paths: list[str] = []
 
-        for _, _, rel_path in required_tiles:
+        for lvl, tile_id, rel_path in required_tiles:
             local_tile = cache_dir / rel_path
             if local_tile.exists() and local_tile.stat().st_size > 0:
                 downloaded_paths.append(local_tile)
             else:
                 missing_rel_paths.append(rel_path)
 
+            if include_features and lvl == 2:
+                rel_feat = get_feature_tile_relative_path(tile_id, level=2)
+                local_feat = cache_dir / rel_feat
+                if local_feat.exists() and local_feat.stat().st_size > 0:
+                    downloaded_paths.append(local_feat)
+                else:
+                    missing_rel_paths.append(rel_feat)
+
         if not missing_rel_paths:
             return downloaded_paths
 
         if verbose:
-            print(f"Fetching {len(missing_rel_paths)} missing Valhalla tiles from {self.base_uri}...")
+            print(f"Fetching {len(missing_rel_paths)} missing Valhalla & feature tiles from {self.base_uri}...")
 
         # Concurrently fetch missing tiles using async loop
         async def _fetch_all(paths: list[str]) -> list[Path]:

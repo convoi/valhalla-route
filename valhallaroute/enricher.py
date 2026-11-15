@@ -822,36 +822,72 @@ def enrich_gps_points(
             roundabout_buffer_meters=roundabout_buffer_meters,
         )
 
-    # OSM Crossings lookup within radius buffer
-    resolved_osm_pbf = None
-    if osm_pbf and Path(osm_pbf).exists():
-        resolved_osm_pbf = Path(osm_pbf)
-    elif Path(osm_dir).exists():
-        found_pbfs = list(Path(osm_dir).glob("*.osm.pbf"))
-        if found_pbfs:
-            resolved_osm_pbf = found_pbfs[0]
+    # Tile-aligned companion feature lookup (stops, yields, traffic lights, crossings)
+    feature_indexer = None
+    search_dirs: list[Path] = []
+    if tile_cache_dir:
+        search_dirs.append(Path(tile_cache_dir))
+    if tile_dir:
+        search_dirs.append(Path(tile_dir))
+    search_dirs.extend([Path("valhalla_tiles"), Path("valhalla_tiles_cache")])
 
-    if resolved_osm_pbf:
-        from .crossings import CrossingIndexer
-        try:
-            indexer = CrossingIndexer(osm_pbf=resolved_osm_pbf, utm_crs=utm_crs)
-            if indexer._crossings:
-                lats = df[resolved_lat_col].to_numpy(dtype=float)
-                lons = df[resolved_lon_col].to_numpy(dtype=float)
-                c_matches, c_types = indexer.query_points(
-                    lats=lats,
-                    lons=lons,
-                    radius_meters=crossing_buffer_meters,
-                )
-                for i, (is_c, c_type) in enumerate(zip(c_matches, c_types)):
-                    if is_c:
-                        matched_results[i]["is_crossing"] = True
-                        matched_results[i]["crossing_type"] = c_type
-                        if c_type == "traffic_signals":
-                            matched_results[i]["has_traffic_signal"] = True
-        except Exception as exc:
-            if verbose:
-                print(f"Warning: Crossing lookup failed: {exc}")
+    for s_dir in search_dirs:
+        if s_dir.exists() and any(s_dir.rglob("*.features.parquet")):
+            from .features import FeatureTileIndexer
+            try:
+                candidate = FeatureTileIndexer(tile_dir=s_dir, utm_crs=utm_crs)
+                if candidate.has_features:
+                    feature_indexer = candidate
+                    break
+            except Exception:
+                pass
+
+    if feature_indexer and feature_indexer.has_features:
+        lats = df[resolved_lat_col].to_numpy(dtype=float)
+        lons = df[resolved_lon_col].to_numpy(dtype=float)
+        f_res = feature_indexer.query_points(lats=lats, lons=lons, radius_meters=15.0)
+        for i in range(len(df)):
+            if f_res["has_stop_sign"][i]:
+                matched_results[i]["has_stop_sign"] = True
+            if f_res["has_yield_sign"][i]:
+                matched_results[i]["has_yield_sign"] = True
+            if f_res["has_traffic_signal"][i]:
+                matched_results[i]["has_traffic_signal"] = True
+            if f_res["is_crossing"][i]:
+                matched_results[i]["is_crossing"] = True
+                if f_res["crossing_type"][i]:
+                    matched_results[i]["crossing_type"] = f_res["crossing_type"][i]
+    else:
+        # Fallback to local OSM PBF if provided and no companion feature tiles found
+        resolved_osm_pbf = None
+        if osm_pbf and Path(osm_pbf).exists():
+            resolved_osm_pbf = Path(osm_pbf)
+        elif Path(osm_dir).exists():
+            found_pbfs = list(Path(osm_dir).glob("*.osm.pbf"))
+            if found_pbfs:
+                resolved_osm_pbf = found_pbfs[0]
+
+        if resolved_osm_pbf:
+            from .crossings import CrossingIndexer
+            try:
+                indexer = CrossingIndexer(osm_pbf=resolved_osm_pbf, utm_crs=utm_crs)
+                if indexer._crossings:
+                    lats = df[resolved_lat_col].to_numpy(dtype=float)
+                    lons = df[resolved_lon_col].to_numpy(dtype=float)
+                    c_matches, c_types = indexer.query_points(
+                        lats=lats,
+                        lons=lons,
+                        radius_meters=crossing_buffer_meters,
+                    )
+                    for i, (is_c, c_type) in enumerate(zip(c_matches, c_types)):
+                        if is_c:
+                            matched_results[i]["is_crossing"] = True
+                            matched_results[i]["crossing_type"] = c_type
+                            if c_type == "traffic_signals":
+                                matched_results[i]["has_traffic_signal"] = True
+            except Exception as exc:
+                if verbose:
+                    print(f"Warning: Crossing lookup failed: {exc}")
 
     # Offline reverse geocoding for city & country fallback
     if reverse_geocode_cities and coords_for_geocoding:
