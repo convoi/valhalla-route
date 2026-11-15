@@ -275,6 +275,7 @@ def build_valhalla_tiles(
     tile_dir: Union[str, Path] = "valhalla_tiles",
     tile_extract: Union[str, Path] = "valhalla_tiles.tar",
     config_path: Union[str, Path, None] = None,
+    build_admins: bool = False,
     overwrite: bool = False,
     verbose: bool = True,
 ) -> Path:
@@ -286,6 +287,7 @@ def build_valhalla_tiles(
         tile_dir: Directory where individual .gph tiles will be generated.
         tile_extract: Path to the target consolidated .tar tile archive.
         config_path: Path to write the temporary or permanent valhalla.json config.
+        build_admins: If True, compiles administrative boundaries db (best for planet/national extracts; disabled for sub-extracts).
         overwrite: Overwrite existing tiles if present.
         verbose: Display build logging.
 
@@ -318,7 +320,12 @@ def build_valhalla_tiles(
     cfg = _sanitize_config(default_config.copy())
     cfg["mjolnir"]["tile_dir"] = str(t_dir).replace("\\", "/")
     cfg["mjolnir"]["tile_extract"] = str(t_extract).replace("\\", "/")
-    cfg["mjolnir"]["admin"] = str(t_dir / "admin.sqlite").replace("\\", "/")
+    if build_admins:
+        cfg["mjolnir"]["admin"] = str(t_dir / "admin.sqlite").replace("\\", "/")
+        cfg["mjolnir"]["data_processing"]["use_admin_db"] = True
+    else:
+        cfg["mjolnir"]["admin"] = ""
+        cfg["mjolnir"]["data_processing"]["use_admin_db"] = False
     cfg["logging"]["type"] = "std_out" if verbose else ""
 
     cfg_file = Path(config_path) if config_path else t_dir.parent / "valhalla.json"
@@ -337,8 +344,8 @@ def build_valhalla_tiles(
     build_tiles_exe = bin_dir / ("valhalla_build_tiles.exe" if sys.platform == "win32" else "valhalla_build_tiles")
     build_admins_exe = bin_dir / ("valhalla_build_admins.exe" if sys.platform == "win32" else "valhalla_build_admins")
 
-    # 1. Run valhalla_build_admins (best-effort: creates admin boundaries for borders/crossing)
-    if build_admins_exe.exists():
+    # 1. Run valhalla_build_admins (only if requested)
+    if build_admins and build_admins_exe.exists():
         if verbose:
             print("Building administrative boundaries (valhalla_build_admins)...")
         try:
