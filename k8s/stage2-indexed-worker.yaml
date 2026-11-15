@@ -17,6 +17,7 @@ spec:
         app.kubernetes.io/component: tile-worker
     spec:
       restartPolicy: OnFailure
+      serviceAccountName: valhallaroute
       containers:
         - name: tile-builder
           image: ghcr.io/valhallaroute:v0.4.0
@@ -24,12 +25,14 @@ spec:
           args:
             - "run-worker"
             - "--manifest"
-            - "s3://valhalla-tiles/manifests/tiles_tasks.jsonl"
+            - "azure://valhalla-tiles/manifests/tiles_tasks.jsonl"
           env:
             - name: JOB_COMPLETION_INDEX
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+            - name: AZURE_STORAGE_ACCOUNT_NAME
+              value: "valhallastorage"
           resources:
             requests:
               cpu: "4"

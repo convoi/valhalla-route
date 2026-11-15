@@ -175,36 +175,143 @@ valhallaroute input_trip.csv -o enriched_trip.csv --url http://localhost:8002
 
 ---
 
-## Continental & Regional Batch Tile Generation (Kubernetes Indexed Jobs)
+## Continental & Regional Batch Tile Generation (Kubernetes & Azure Deployment)
 
-ValhallaRoute supports two-stage distributed batch tile generation across S3, Google Cloud Storage, Azure Blob Storage, and local disks using `obstore`.
+ValhallaRoute provides a cloud-scale, two-stage distributed tile compiler capable of building entire countries, continents, or global tile networks into object storage (Azure Blob Storage, AWS S3, Google Cloud Storage, or local storage).
 
-### Stage 1: Generate Task Manifest
-Plan tile generation across multiple Geofabrik regions, subregions, or wildcards (`germany/*` expands to all 16 states):
-```bash
-# Direct CLI regions:
-valhallaroute plan-batch \
-  --regions bayern berlin hamburg \
-  -m s3://valhalla-tiles/manifests/tiles_tasks.jsonl \
-  -o s3://valhalla-tiles/global/
-
-# Or via a regions text file (one region per line, # comments supported):
-valhallaroute plan-batch \
-  --regions-file regions.txt \
-  -m s3://valhalla-tiles/manifests/tiles_tasks.jsonl \
-  -o s3://valhalla-tiles/global/
 ```
-
-### Stage 2: Run Worker
-Worker pods in a Kubernetes Indexed Job (`completionMode: Indexed`) execute their assigned region mapped from `$JOB_COMPLETION_INDEX`:
-```bash
-valhallaroute run-worker \
-  -m s3://valhalla-tiles/manifests/tiles_tasks.jsonl
+┌───────────────────────────────────────────────────────────────────┐
+│                    Stage 1: Batch Planner Job                     │
+│  valhallaroute plan-batch --regions "germany/*"                   │
+│  - Queries Geofabrik index, expands wildcards into subregions     │
+│  - Writes task manifest JSONL to Azure Blob Storage               │
+└─────────────────────────────────┬─────────────────────────────────┘
+                                  │
+                                  ▼
+┌───────────────────────────────────────────────────────────────────┐
+│              Stage 2: Kubernetes Indexed Worker Job               │
+│  valhallaroute run-worker -m azure://<container>/manifest.jsonl   │
+│  - completionMode: Indexed, completions: N, parallelism: P        │
+│  - Worker pod i pulls task i mapped from $JOB_COMPLETION_INDEX    │
+│  - Compiles Valhalla routing graph tiles across CPU cores         │
+│  - Concurrently uploads .gph tiles to azure://<container>/global/ │
+└───────────────────────────────────────────────────────────────────┘
 ```
-
-Workers download their assigned region's `.osm.pbf`, compile the Valhalla hierarchy graph tiles, and upload the generated `.gph` files to the shared global cloud prefix (`s3://valhalla-tiles/global/{level}/{...}.gph`).
 
 ---
+
+### Azure Workload Identity Authentication (AKS)
+
+ValhallaRoute uses [`obstore`](https://github.com/developmentseed/obstore) (powered by Rust's `object_store`) for cloud storage operations. On **Azure Kubernetes Service (AKS)**, it authenticates passwordlessly via **Azure Workload Identity**:
+
+#### How It Works:
+1. **OIDC Token Projection:** AKS projects an OIDC service account token signed by the cluster's OIDC issuer into the pod at `/var/run/secrets/azure/tokens/azure-identity-token`.
+2. **Mutating Webhook:** The Azure Workload Identity webhook reads the pod's ServiceAccount annotations (`azure.workload.identity/client-id`) and automatically injects:
+   * `AZURE_CLIENT_ID`: Client ID of the User-Assigned Managed Identity.
+   * `AZURE_TENANT_ID`: Azure Entra ID Tenant ID.
+   * `AZURE_FEDERATED_TOKEN_FILE`: `/var/run/secrets/azure/tokens/azure-identity-token`.
+   * `AZURE_AUTHORITY_HOST`: `https://login.microsoftonline.com/`.
+3. **Passwordless Entra ID Exchange:** When `obstore` accesses `azure://<container>/...`, it exchanges the projected OIDC token for an Azure OAuth token with Microsoft Entra ID.
+4. **RBAC Authorization:** The Managed Identity accesses the Storage Account using Azure RBAC (`Storage Blob Data Contributor`) with **zero secrets** stored in Kubernetes secrets or config files.
+
+#### 1. Enable Workload Identity on your AKS cluster:
+```bash
+az aks update \
+  --resource-group <RESOURCE_GROUP> \
+  --name <CLUSTER_NAME> \
+  --enable-workload-identity \
+  --enable-oidc-issuer
+```
+
+#### 2. Create Managed Identity and Grant Storage Permissions:
+```bash
+# Create User-Assigned Managed Identity
+az identity create \
+  --name valhallaroute-identity \
+  --resource-group <RESOURCE_GROUP> \
+  --location westeurope
+
+export USER_ASSIGNED_CLIENT_ID="$(az identity show -g <RESOURCE_GROUP> -n valhallaroute-identity --query clientId -o tsv)"
+export STORAGE_ID="$(az storage account show -n <STORAGE_ACCOUNT> -g <RESOURCE_GROUP> --query id -o tsv)"
+
+# Grant Storage Blob Data Contributor role
+az role assignment create \
+  --role "Storage Blob Data Contributor" \
+  --assignee "$USER_ASSIGNED_CLIENT_ID" \
+  --scope "$STORAGE_ID"
+```
+
+#### 3. Create Federated Identity Credential:
+```bash
+export AKS_OIDC_ISSUER="$(az aks show -g <RESOURCE_GROUP> -n <CLUSTER_NAME> --query "oidcIssuerProfile.issuerUrl" -o tsv)"
+
+az identity federated-credential create \
+  --name valhallaroute-federated-cred \
+  --identity-name valhallaroute-identity \
+  --resource-group <RESOURCE_GROUP> \
+  --issuer "$AKS_OIDC_ISSUER" \
+  --subject "system:serviceaccount:default:valhallaroute" \
+  --audience "api://AzureADTokenExchange"
+```
+
+---
+
+### Helm Chart Deployment (`charts/valhallaroute`)
+
+A production-ready Helm chart is provided in [`charts/valhallaroute`](file:///C:/Users/jhees/PycharmProjects/ValhallaRoute/charts/valhallaroute).
+
+#### 1. Install via Helm with Azure Workload Identity:
+```bash
+helm install valhallaroute ./charts/valhallaroute \
+  --set azure.storageAccountName="<STORAGE_ACCOUNT>" \
+  --set azure.container="valhalla-tiles" \
+  --set azure.workloadIdentity.clientId="$USER_ASSIGNED_CLIENT_ID" \
+  --set serviceAccount.name="valhallaroute"
+```
+
+#### 2. Customizing Regions and Parallelism:
+```bash
+helm install valhallaroute ./charts/valhallaroute \
+  --set azure.storageAccountName="<STORAGE_ACCOUNT>" \
+  --set azure.workloadIdentity.clientId="$USER_ASSIGNED_CLIENT_ID" \
+  --set planner.regions="{bayern,berlin,hamburg}" \
+  --set worker.completions=3 \
+  --set worker.parallelism=3
+```
+
+#### 3. Helm Values Reference (`values.yaml`):
+| Value | Description | Default |
+| :--- | :--- | :--- |
+| `azure.storageAccountName` | Azure Storage Account name | `"valhallastorage"` |
+| `azure.container` | Target blob container | `"valhalla-tiles"` |
+| `azure.workloadIdentity.enabled` | Enable Azure Workload Identity | `true` |
+| `azure.workloadIdentity.clientId` | User-Assigned Managed Identity Client ID | `""` |
+| `serviceAccount.create` | Create annotated ServiceAccount | `true` |
+| `planner.regions` | Regions / wildcard expressions (`germany/*`) | `["germany/*"]` |
+| `planner.manifestUri` | Destination manifest JSONL path | `azure://valhalla-tiles/manifests/tiles_tasks.jsonl` |
+| `worker.completions` | Number of tasks in the manifest to execute | `16` |
+| `worker.parallelism` | Maximum concurrent worker pods | `4` |
+| `worker.resources.requests` | Worker CPU / Memory request | `cpu: 4`, `memory: 8Gi` |
+| `worker.resources.limits` | Worker CPU / Memory limit | `cpu: 8`, `memory: 16Gi` |
+
+---
+
+### Worker Hardware & Pod Resource Sizing Guide
+
+Based on real OS kernel performance benchmarks measured for the **Bavaria (`bayern`)** region (818.3 MB PBF, 70,500 km²):
+
+| Metric | Measured Hard Number | Kubernetes Recommendation |
+| :--- | :--- | :--- |
+| **Worker Compilation Time** | `208.48 s` (~3.47 min) | Fast turnaround across 16 cores |
+| **Total CPU Consumption** | `857.20 s` (~14.3 CPU min) | Request `4` CPUs, limit `8`–`16` CPUs |
+| **Peak Working Set RAM** | `7,378 MB` (~`7.21 GB`) | Request `8Gi`, limit `16Gi` to avoid OOM |
+| **Output Volume** | `212` tiles (`990.67 MB`) | Ephemeral local disk >= `10Gi` |
+
+> [!TIP]
+> **Sub-Extract Administrative DB:** For sub-extracts (states/provinces), country boundary polygons are clipped by extract borders. ValhallaRoute automatically disables the admin DB for regional builds (`build_admins: false`), ensuring fast, crash-free execution across all worker nodes.
+
+---
+
 
 ## Benchmark Dataset: Hannover Trajectories
 

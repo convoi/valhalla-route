@@ -1,0 +1,16 @@
+apiVersion: v2
+name: valhallaroute
+description: Helm chart for distributed Valhalla tile generation and GPS trajectory map matching on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "v0.4.0"
+keywords:
+  - valhalla
+  - routing
+  - openstreetmap
+  - gps
+  - gis
+  - azure
+  - workload-identity
+maintainers:
+  - name: ValhallaRoute Team

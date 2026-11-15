@@ -1,0 +1,107 @@
+# Default values for valhallaroute Helm chart.
+
+# Global container image settings
+image:
+  repository: ghcr.io/valhallaroute
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion (v0.4.0).
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Azure Configuration (Default Authentication Method)
+# Uses Azure Workload Identity (federated credentials between AKS ServiceAccount & Azure User-Assigned Managed Identity)
+azure:
+  # Name of the Azure Storage Account hosting tile blobs and manifests
+  storageAccountName: "valhallastorage"
+  # Target blob container
+  container: "valhalla-tiles"
+  workloadIdentity:
+    # Enables Azure Workload Identity label and webhook token projection
+    enabled: true
+    # Client ID (Application ID) of the User-Assigned Managed Identity
+    clientId: "00000000-0000-0000-0000-000000000000"
+    # Optional: Azure Entra ID Tenant ID (defaults to AKS cluster tenant if omitted)
+    tenantId: ""
+
+# ServiceAccount Configuration
+serviceAccount:
+  # Specifies whether a ServiceAccount should be created
+  create: true
+  # The name of the service account to use. If not set and create is true, a name is generated using the fullname template
+  name: ""
+  # Annotations to add to the ServiceAccount
+  annotations: {}
+  # Labels to add to the ServiceAccount
+  labels: {}
+  automountServiceAccountToken: true
+
+# Stage 1: Batch Planning Job (valhallaroute plan-batch)
+# Resolves continental/regional wildcard patterns into a task manifest JSONL file
+planner:
+  enabled: true
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+
+  # Target regions list (supports slugs, Geofabrik canonical paths, and wildcard expansion like "germany/*")
+  regions:
+    - "germany/*"
+
+  # Optional multi-line string for a regions file (if provided, mounted via ConfigMap and passed as --regions-file)
+  regionsFileContent: ""
+
+  # Manifest destination URI (Azure Blob Storage URI: azure://<container>/<prefix>)
+  manifestUri: "azure://valhalla-tiles/manifests/tiles_tasks.jsonl"
+  # Global tile destination prefix URI
+  outputUri: "azure://valhalla-tiles/global/"
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+
+  podAnnotations: {}
+  podLabels: {}
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Stage 2: Distributed Indexed Worker Job (valhallaroute run-worker)
+# Kubernetes Indexed Job where each pod runs task $JOB_COMPLETION_INDEX
+worker:
+  enabled: true
+  # Total tasks matching the manifest entries (e.g. 16 for germany/*)
+  completions: 16
+  # Max concurrent workers running in parallel
+  parallelism: 4
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+
+  # URI to read task manifest
+  manifestUri: "azure://valhalla-tiles/manifests/tiles_tasks.jsonl"
+  # Optional override for tile destination prefix URI (defaults to manifest's tile_storage_uri if empty)
+  tileStorageUri: "azure://valhalla-tiles/global/"
+
+  # Resource allocations based on benchmark hard numbers (Bavaria peak RAM: ~7.2 GB)
+  resources:
+    requests:
+      cpu: "4"
+      memory: "8Gi"
+    limits:
+      cpu: "8"
+      memory: "16Gi"
+
+  podAnnotations: {}
+  podLabels: {}
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  volumeMounts: []
+  volumes: []
