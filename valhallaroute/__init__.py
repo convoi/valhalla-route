@@ -1,6 +1,7 @@
 """ValhallaRoute: GPS trip route enrichment using Valhalla."""
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
+from .batch import plan_batch, run_worker
 from .client import ActorBackend, HttpBackend, ValhallaBackend, resolve_backend
 from .crossings import CrossingIndexer
 from .enricher import enrich_gps_points, read_gps_csv
@@ -12,6 +13,14 @@ from .tile_manager import (
     ensure_tiles_exist,
     fetch_geofabrik_index,
     find_matching_geofabrik_region,
+)
+
+from .storage import (
+    StorageManager,
+    get_tiles_for_bbox,
+    get_valhalla_tile_id,
+    get_valhalla_tile_relative_path,
+    uri_to_local_path,
 )
 
 __all__ = [
@@ -29,4 +38,10 @@ __all__ = [
     "ensure_tiles_exist",
     "fetch_geofabrik_index",
     "find_matching_geofabrik_region",
+    "StorageManager",
+    "get_tiles_for_bbox",
+    "get_valhalla_tile_id",
+    "get_valhalla_tile_relative_path",
+    "plan_batch",
+    "run_worker",
 ]

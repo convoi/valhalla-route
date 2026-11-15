@@ -66,6 +66,16 @@ def read_gps_csv(
         input_str = str(csv_input)
         if "\n" in input_str or "\r" in input_str:
             df = pd.read_csv(io.StringIO(input_str))
+        elif "://" in input_str and not input_str.startswith("file://"):
+            from .storage import StorageManager
+            mgr = StorageManager.from_uri(input_str)
+            raw_b = mgr.read_bytes("")
+            if input_str.lower().endswith((".parquet", ".pq")):
+                df = pd.read_parquet(io.BytesIO(raw_b))
+            else:
+                df = pd.read_csv(io.BytesIO(raw_b))
+        elif input_str.lower().endswith((".parquet", ".pq")):
+            df = pd.read_parquet(csv_input)
         else:
             df = pd.read_csv(csv_input)
     elif hasattr(csv_input, "read"):
@@ -488,6 +498,8 @@ def enrich_gps_points(
     actor: Any = None,
     tile_extract: Union[str, Path, None] = None,
     tile_dir: Union[str, Path, None] = None,
+    tile_storage_uri: str | None = None,
+    tile_cache_dir: Union[str, Path, None] = "valhalla_tiles_cache",
     config: Union[dict[str, Any], str, Path, None] = None,
     valhalla_url: str | None = None,
     costing: str = "auto",
@@ -599,6 +611,24 @@ def enrich_gps_points(
         (float(lat), float(lon))
         for lat, lon in zip(df[resolved_lat_col], df[resolved_lon_col])
     ]
+
+    # If remote blob storage URI is provided for tiles, ensure sparse .gph tiles are cached locally
+    effective_remote_tile_uri = tile_storage_uri
+    if not effective_remote_tile_uri and isinstance(tile_dir, str) and "://" in tile_dir and not tile_dir.startswith("file://"):
+        effective_remote_tile_uri = tile_dir
+
+    if effective_remote_tile_uri and not df.empty and backend is None:
+        from .storage import StorageManager
+        storage_mgr = StorageManager.from_uri(effective_remote_tile_uri)
+        cache_path = Path(tile_cache_dir or "valhalla_tiles_cache")
+        storage_mgr.ensure_tiles_for_points(
+            lats=df[resolved_lat_col].to_numpy(dtype=float),
+            lons=df[resolved_lon_col].to_numpy(dtype=float),
+            local_cache_dir=cache_path,
+            verbose=verbose,
+        )
+        tile_dir = str(cache_path)
+        tile_extract = None
 
     # If backend is not explicitly provided, and no URL or Actor is set, check if tiles need generation
     if backend is None and actor is None and valhalla_url is None and config is None:
