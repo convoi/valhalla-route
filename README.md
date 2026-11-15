@@ -291,8 +291,8 @@ helm install valhallaroute ./charts/valhallaroute \
 | `planner.manifestUri` | Destination manifest JSONL path | `azure://valhalla-tiles/manifests/tiles_tasks.jsonl` |
 | `worker.completions` | Number of tasks in the manifest to execute | `16` |
 | `worker.parallelism` | Maximum concurrent worker pods | `4` |
-| `worker.resources.requests` | Worker CPU / Memory request | `cpu: 4`, `memory: 8Gi` |
-| `worker.resources.limits` | Worker CPU / Memory limit | `cpu: 8`, `memory: 16Gi` |
+| `worker.resources.requests` | Worker CPU / Memory request (Guaranteed QoS) | `cpu: 8`, `memory: 16Gi` |
+| `worker.resources.limits` | Worker CPU / Memory limit (Guaranteed QoS) | `cpu: 8`, `memory: 16Gi` |
 
 ---
 
@@ -300,14 +300,16 @@ helm install valhallaroute ./charts/valhallaroute \
 
 Based on real OS kernel performance benchmarks measured for the **Bavaria (`bayern`)** region (818.3 MB PBF, 70,500 km²):
 
-| Metric | Measured Hard Number | Kubernetes Recommendation |
+| Metric | Measured Hard Number | Kubernetes Recommendation (Guaranteed QoS) |
 | :--- | :--- | :--- |
 | **Worker Compilation Time** | `208.48 s` (~3.47 min) | Fast turnaround across 16 cores |
-| **Total CPU Consumption** | `857.20 s` (~14.3 CPU min) | Request `4` CPUs, limit `8`–`16` CPUs |
-| **Peak Working Set RAM** | `7,378 MB` (~`7.21 GB`) | Request `8Gi`, limit `16Gi` to avoid OOM |
+| **Total CPU Consumption** | `857.20 s` (~14.3 CPU min) | Set requests and limits equal: `cpu: 8` |
+| **Peak Working Set RAM** | `7,378 MB` (~`7.21 GB`) | Set requests and limits equal: `memory: 16Gi` |
 | **Output Volume** | `212` tiles (`990.67 MB`) | Ephemeral local disk >= `10Gi` |
 
 > [!TIP]
+> **Guaranteed Quality of Service (QoS):** Setting resource `requests` equal to `limits` places the worker pods into Kubernetes' `Guaranteed` QoS class. This guarantees dedicated CPU allocation without noisy-neighbor throttling and prevents Linux kernel OOM kills under node memory pressure.
+>
 > **Sub-Extract Administrative DB:** For sub-extracts (states/provinces), country boundary polygons are clipped by extract borders. ValhallaRoute automatically disables the admin DB for regional builds (`build_admins: false`), ensuring fast, crash-free execution across all worker nodes.
 
 ---

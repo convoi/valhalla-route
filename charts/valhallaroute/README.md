@@ -131,14 +131,16 @@ helm install valhallaroute ./charts/valhallaroute \
 | `planner.regions` | List of regions or wildcards (`germany/*`, `europe/monaco`) | `["germany/*"]` |
 | `planner.manifestUri` | Manifest JSONL target URI | `azure://valhalla-tiles/manifests/tiles_tasks.jsonl` |
 | `planner.outputUri` | Destination cloud prefix for tiles | `azure://valhalla-tiles/global/` |
-| `planner.resources.requests.cpu` | Planner CPU request | `500m` |
-| `planner.resources.requests.memory` | Planner memory request | `1Gi` |
+| `planner.resources.requests.cpu` | Planner CPU request | `1` |
+| `planner.resources.requests.memory` | Planner memory request | `2Gi` |
+| `planner.resources.limits.cpu` | Planner CPU limit | `1` |
+| `planner.resources.limits.memory` | Planner memory limit | `2Gi` |
 | `worker.enabled` | Enable Stage 2 indexed worker job | `true` |
 | `worker.completions` | Total tasks in manifest to execute | `16` |
 | `worker.parallelism` | Max concurrent worker pods | `4` |
 | `worker.manifestUri` | URI of manifest JSONL file to read | `azure://valhalla-tiles/manifests/tiles_tasks.jsonl` |
 | `worker.tileStorageUri` | Destination cloud storage URI prefix | `azure://valhalla-tiles/global/` |
-| `worker.resources.requests.cpu` | Worker CPU request | `4` |
-| `worker.resources.requests.memory`| Worker memory request | `8Gi` |
+| `worker.resources.requests.cpu` | Worker CPU request | `8` |
+| `worker.resources.requests.memory`| Worker memory request | `16Gi` |
 | `worker.resources.limits.cpu` | Worker CPU limit | `8` |
 | `worker.resources.limits.memory` | Worker memory limit | `16Gi` |

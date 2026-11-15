@@ -57,12 +57,13 @@ planner:
   # Global tile destination prefix URI
   outputUri: "azure://valhalla-tiles/global/"
 
+  # Guaranteed QoS: requests and limits are set identical to avoid noisy-neighbor throttling
   resources:
     requests:
-      cpu: "500m"
-      memory: "1Gi"
+      cpu: "1"
+      memory: "2Gi"
     limits:
-      cpu: "1000m"
+      cpu: "1"
       memory: "2Gi"
 
   podAnnotations: {}
@@ -88,11 +89,12 @@ worker:
   # Optional override for tile destination prefix URI (defaults to manifest's tile_storage_uri if empty)
   tileStorageUri: "azure://valhalla-tiles/global/"
 
-  # Resource allocations based on benchmark hard numbers (Bavaria peak RAM: ~7.2 GB)
+  # Guaranteed QoS: requests and limits are set identical (Bavaria peak RAM: ~7.2 GB)
+  # Prevents memory overcommit, pod eviction under node pressure, and CPU throttling
   resources:
     requests:
-      cpu: "4"
-      memory: "8Gi"
+      cpu: "8"
+      memory: "16Gi"
     limits:
       cpu: "8"
       memory: "16Gi"
