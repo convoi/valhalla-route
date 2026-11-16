@@ -120,6 +120,22 @@ class StorageManager:
         self.base_uri = base_uri.rstrip("/")
         self.parsed = urlparse(self.base_uri)
         self.store, self.prefix = self._create_store(self.base_uri, self.parsed, store_options)
+        # If prefix ends with 'latest', automatically resolve latest.txt snapshot pointer if present
+        if self.prefix == "latest" or self.prefix.endswith("/latest"):
+            if self.prefix == "latest":
+                parent_key = ""
+                pointer_key = "latest.txt"
+            else:
+                parent_key = self.prefix[:-len("/latest")]
+                pointer_key = f"{parent_key}/latest.txt"
+
+            try:
+                resp = obs.get(self.store, pointer_key)
+                pointer = bytes(resp.bytes()).decode("utf-8").strip()
+                if pointer:
+                    self.prefix = f"{parent_key}/{pointer}".strip("/")
+            except Exception:
+                pass
 
     @classmethod
     def from_uri(cls, uri: str, **kwargs: Any) -> StorageManager:
@@ -194,6 +210,15 @@ class StorageManager:
                 raw_path = base_uri
 
             local_path = Path(raw_path).resolve()
+            # If path ends in 'latest', resolve pointer file latest.txt in parent directory if it exists
+            if local_path.name == "latest" and (local_path.parent / "latest.txt").is_file():
+                try:
+                    pointer = (local_path.parent / "latest.txt").read_text("utf-8").strip()
+                    if pointer:
+                        local_path = (local_path.parent / pointer).resolve()
+                except Exception:
+                    pass
+
             local_path.mkdir(parents=True, exist_ok=True)
             return obs.store.LocalStore(prefix=str(local_path)), ""
         else:

@@ -18,6 +18,7 @@ RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-rg-valhalla}"
 LOCATION="${AZURE_LOCATION:-westeurope}"
 VM_SIZE="${AZURE_VM_SIZE:-Standard_E32s_v5}" # 32 vCPUs, 256 GB RAM (~$0.45/hr on Spot)
 CONTAINER_NAME="valhalla-tiles"
+DATE_TAG="${AZURE_DATE_TAG:-$(date +%Y-%m-%d)}"
 CONTINENTS="europe,north-america,south-america,oceania"
 BUILD_ADMINS=true
 DOCKER_IMAGE=""
@@ -34,6 +35,7 @@ Required Arguments:
 
 Optional Arguments:
   -c, --container         Storage container name (default: valhalla-tiles)
+  -d, --date-folder       Destination date folder/snapshot tag (default: current date, e.g. $(date +%Y-%m-%d))
   -r, --resource-group    Azure Resource Group (default: rg-valhalla)
   -l, --location          Azure Region (default: westeurope)
   -v, --vm-size           Azure VM Size (default: Standard_E32s_v5)
@@ -57,6 +59,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -c|--container)
       CONTAINER_NAME="$2"
+      shift 2
+      ;;
+    -d|--date-folder|--date-tag)
+      DATE_TAG="$2"
       shift 2
       ;;
     -r|--resource-group)
@@ -113,7 +119,8 @@ echo "VM Size:           $VM_SIZE (Spot)"
 echo "Resource Group:    $RESOURCE_GROUP"
 echo "Location:          $LOCATION"
 echo "Docker Image:      $DOCKER_IMAGE"
-echo "Storage Target:    az://$STORAGE_ACCOUNT/$CONTAINER_NAME/global/"
+echo "Storage Target:    az://$STORAGE_ACCOUNT/$CONTAINER_NAME/$DATE_TAG/"
+echo "Date Snapshot:     $DATE_TAG"
 echo "Continents:        $CONTINENTS"
 echo "Build Admins:      $BUILD_ADMINS"
 echo "=================================================================="
@@ -189,21 +196,32 @@ $ACR_LOGIN_STEP
       ${DOCKER_IMAGE} \
       build-continents \
       --continents "${CONTINENTS}" \
-      --destination-storage "az://${STORAGE_ACCOUNT}/${CONTAINER_NAME}/global/" \
+      --destination-storage "az://${STORAGE_ACCOUNT}/${CONTAINER_NAME}/${DATE_TAG}/" \
       --work-dir /work \
       ${ADMIN_FLAG} > /mnt/valhalla_work/build.log 2>&1
 
-  # 4. Upload execution log to blob storage
+  # 4. Upload execution log to date folder
   - |
     az storage blob upload \
       --account-name "${STORAGE_ACCOUNT}" \
       --container-name "${CONTAINER_NAME}" \
       --auth-mode login \
       --file /mnt/valhalla_work/build.log \
-      --name "global/logs/build-${TIMESTAMP}.log" \
+      --name "${DATE_TAG}/logs/build-${TIMESTAMP}.log" \
       --overwrite || true
 
-  # 5. Automatically shut down Spot VM to stop billing immediately
+  # 5. Update latest.txt pointer at container root
+  - |
+    echo "${DATE_TAG}" > /mnt/valhalla_work/latest.txt
+    az storage blob upload \
+      --account-name "${STORAGE_ACCOUNT}" \
+      --container-name "${CONTAINER_NAME}" \
+      --auth-mode login \
+      --file /mnt/valhalla_work/latest.txt \
+      --name "latest.txt" \
+      --overwrite || true
+
+  # 6. Automatically shut down Spot VM to stop billing immediately
   - poweroff
 EOF
 
@@ -245,5 +263,6 @@ echo "VM '$VM_NAME' initiated successfully in background."
 echo ""
 echo "Monitoring Commands:"
 echo "  VM Status: az vm get-instance-view -g $RESOURCE_GROUP -n $VM_NAME --query instanceView.statuses"
-echo "  Build Log: az storage blob download --account-name $STORAGE_ACCOUNT -c $CONTAINER_NAME -n global/logs/build-${TIMESTAMP}.log --file build.log --auth-mode login"
+echo "  Build Log: az storage blob download --account-name $STORAGE_ACCOUNT -c $CONTAINER_NAME -n ${DATE_TAG}/logs/build-${TIMESTAMP}.log --file build.log --auth-mode login"
+echo "  Pointer:   az storage blob download --account-name $STORAGE_ACCOUNT -c $CONTAINER_NAME -n latest.txt --file latest.txt --auth-mode login"
 echo "------------------------------------------------------------------"

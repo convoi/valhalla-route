@@ -23,14 +23,28 @@ runcmd:
   - cd valhallaroute-repo
   - /root/.local/bin/uv pip install -e . --system
 
-  # 4. Run Continental Tile Pack Builder
+  # 4. Run Continental Tile Pack Builder into current date folder
   # Replace STORAGE_ACCOUNT and CONTAINER with your actual Azure Blob parameters
   - |
+    DATE_TAG="$(date +%Y-%m-%d)"
+    TARGET_CONTAINER="${AZURE_STORAGE_CONTAINER:-valhalla-tiles}"
     valhallaroute build-continents \
       --continents europe,north-america,south-america,oceania \
-      --destination-storage az://${AZURE_STORAGE_CONTAINER:-valhalla-tiles}/global/ \
+      --destination-storage "az://${TARGET_CONTAINER}/${DATE_TAG}/" \
       --work-dir /mnt/valhalla_work \
       --build-admins
+
+    # Write latest.txt pointer
+    if [[ -n "${AZURE_STORAGE_ACCOUNT:-}" ]]; then
+      echo "${DATE_TAG}" > /mnt/valhalla_work/latest.txt
+      az storage blob upload \
+        --account-name "${AZURE_STORAGE_ACCOUNT}" \
+        --container-name "${TARGET_CONTAINER}" \
+        --auth-mode login \
+        --file /mnt/valhalla_work/latest.txt \
+        --name "latest.txt" \
+        --overwrite || true
+    fi
 
   # 5. Automatically deallocate/shut down Spot VM upon completion to stop billing
   - poweroff

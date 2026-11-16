@@ -11,6 +11,7 @@ VM_NAME="valhalla-builder-$(date +%Y%m%d-%H%M)"
 VM_SIZE="${AZURE_VM_SIZE:-Standard_E32s_v5}" # 32 vCPUs, 256 GB RAM (~$0.45/hr on Spot)
 STORAGE_ACCOUNT="${AZURE_STORAGE_ACCOUNT:-mystorageaccount}"
 CONTAINER_NAME="${AZURE_STORAGE_CONTAINER:-valhalla-tiles}"
+DATE_TAG="${AZURE_DATE_TAG:-$(date +%Y-%m-%d)}"
 CLOUD_INIT_PATH="$(dirname "$0")/cloud-init.yaml"
 
 echo "=================================================================="
@@ -19,7 +20,8 @@ echo "VM Name:           $VM_NAME"
 echo "VM Size:           $VM_SIZE (Spot)"
 echo "Resource Group:    $RESOURCE_GROUP"
 echo "Location:          $LOCATION"
-echo "Storage Target:    az://$CONTAINER_NAME/global/"
+echo "Storage Target:    az://$STORAGE_ACCOUNT/$CONTAINER_NAME/$DATE_TAG/"
+echo "Date Snapshot:     $DATE_TAG"
 echo "=================================================================="
 
 # 1. Retrieve Storage Account Resource ID for RBAC role assignment

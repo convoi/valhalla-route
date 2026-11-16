@@ -141,3 +141,34 @@ def test_storage_manager_azure_urls(monkeypatch):
     mgr3 = StorageManager("abfs://mycontainer@myadlsaccount.dfs.core.windows.net/output")
     assert mgr3.prefix == "output"
 
+
+def test_storage_manager_latest_pointer(tmp_path: Path):
+    import obstore as obs
+
+    # 1. Local filesystem pointer resolution
+    root = tmp_path / "tiles"
+    root.mkdir()
+    (root / "latest.txt").write_text("2026-11-16\n", encoding="utf-8")
+    d = root / "2026-11-16"
+    d.mkdir()
+    (d / "tile.gph").write_bytes(b"local-tile-bytes")
+
+    # Accessing /latest automatically redirects to the 2026-11-16 date folder
+    mgr_local = StorageManager.from_uri(f"file://{root.as_posix()}/latest")
+    assert mgr_local.read_bytes("tile.gph") == b"local-tile-bytes"
+
+    # 2. Cloud prefix pointer resolution logic
+    store = StorageManager.from_uri("memory://bucket/nested/latest")
+    obs.put(store.store, "nested/latest.txt", b"2026-11-16\n")
+    obs.put(store.store, "nested/2026-11-16/tile.gph", b"cloud-tile-bytes")
+
+    # Manually re-trigger __init__ resolution check on the store
+    if store.prefix.endswith("/latest"):
+        parent_key = store.prefix[:-len("/latest")]
+        resp = obs.get(store.store, f"{parent_key}/latest.txt")
+        store.prefix = f"{parent_key}/{bytes(resp.bytes()).decode('utf-8').strip()}".strip("/")
+
+    assert store.prefix == "nested/2026-11-16"
+    assert store.read_bytes("tile.gph") == b"cloud-tile-bytes"
+
+

@@ -15,6 +15,8 @@
     Azure Storage Account name.
 .PARAMETER Container
     Storage container name (default: 'valhalla-tiles').
+.PARAMETER DateFolder
+    Destination date folder / snapshot tag (default: current date 'yyyy-MM-dd').
 .PARAMETER ResourceGroup
     Azure Resource Group name (default: 'rg-valhalla').
 .PARAMETER Location
@@ -38,6 +40,7 @@ param(
     [string]$StorageAccount,
 
     [string]$Container = "valhalla-tiles",
+    [string]$DateFolder = (Get-Date -Format "yyyy-MM-dd"),
     [string]$ResourceGroup = "rg-valhalla",
     [string]$Location = "westeurope",
     [string]$VmSize = "Standard_E32s_v5",
@@ -60,7 +63,8 @@ Write-Host "VM Size:           $VmSize (Spot)"
 Write-Host "Resource Group:    $ResourceGroup"
 Write-Host "Location:          $Location"
 Write-Host "Docker Image:      $Image"
-Write-Host "Storage Target:    az://$StorageAccount/$Container/global/"
+Write-Host "Storage Target:    az://$StorageAccount/$Container/$DateFolder/"
+Write-Host "Date Snapshot:     $DateFolder"
 Write-Host "Continents:        $Continents"
 Write-Host "Build Admins:      $(-not $SkipAdmins)"
 Write-Host "=================================================================="
@@ -122,21 +126,32 @@ $acrLoginStep
       $Image \
       build-continents \
       --continents "$Continents" \
-      --destination-storage "az://$StorageAccount/$Container/global/" \
+      --destination-storage "az://$StorageAccount/$Container/$DateFolder/" \
       --work-dir /work \
       $adminFlag > /mnt/valhalla_work/build.log 2>&1
 
-  # 4. Upload execution log to blob storage
+  # 4. Upload execution log to date folder
   - |
     az storage blob upload \
       --account-name "$StorageAccount" \
       --container-name "$Container" \
       --auth-mode login \
       --file /mnt/valhalla_work/build.log \
-      --name "global/logs/build-$timestamp.log" \
+      --name "$DateFolder/logs/build-$timestamp.log" \
       --overwrite || true
 
-  # 5. Automatically shut down Spot VM to stop billing immediately
+  # 5. Update latest.txt pointer at container root
+  - |
+    echo "$DateFolder" > /mnt/valhalla_work/latest.txt
+    az storage blob upload \
+      --account-name "$StorageAccount" \
+      --container-name "$Container" \
+      --auth-mode login \
+      --file /mnt/valhalla_work/latest.txt \
+      --name "latest.txt" \
+      --overwrite || true
+
+  # 6. Automatically shut down Spot VM to stop billing immediately
   - poweroff
 "@
 
@@ -183,5 +198,7 @@ Write-Host ""
 Write-Host "To monitor status:"
 Write-Host "  az vm get-instance-view -g $ResourceGroup -n $vmName --query instanceView.statuses"
 Write-Host "To check logs once finished:"
-Write-Host "  az storage blob download --account-name $StorageAccount -c $Container -n global/logs/build-$timestamp.log --file build.log --auth-mode login"
+Write-Host "  az storage blob download --account-name $StorageAccount -c $Container -n $DateFolder/logs/build-$timestamp.log --file build.log --auth-mode login"
+Write-Host "To check latest snapshot pointer:"
+Write-Host "  az storage blob download --account-name $StorageAccount -c $Container -n latest.txt --file latest.txt --auth-mode login"
 Write-Host "------------------------------------------------------------------"

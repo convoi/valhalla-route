@@ -457,17 +457,17 @@ uv run valhallaroute build-admin -o admin_detailed.sqlite -c NL --admin-levels 2
 For global or multi-continental routing without Level 0/1 tile collisions, ValhallaRoute includes a single-node continental builder. Because continents (Europe, Americas, Oceania) do not share roads, each continent's graph tiles (`.gph`) and companion feature parquets (`.features.parquet`) can be compiled cleanly in sequence on high-speed local NVMe storage and uploaded directly into a shared cloud object storage prefix (Azure Blob Storage, S3, or GCS).
 
 ```bash
-# Build Europe, North America, South America, and Oceania into Azure Blob Storage
+# Build Europe, North America, South America, and Oceania into Azure Blob Storage (dated snapshot)
 valhallaroute build-continents \
   --continents europe,north-america,south-america,oceania \
-  --destination-storage az://valhalla-tiles/global/ \
+  --destination-storage az://mystorageaccount/valhalla-tiles/$(date +%Y-%m-%d)/ \
   --work-dir /mnt/nvme/valhalla \
   --build-admins
 ```
 
 ### Automated Monthly Build via Docker & Azure Managed Identity
 
-You can launch an ephemeral **Azure Spot VM** (`Standard_E32s_v5`, 32 vCPUs, 256 GB RAM, ~$0.45/hr) running your Docker container with a single command. The container authenticates **passwordlessly** using an Azure System-Assigned Managed Identity (no storage account keys or secrets), compiles the continents on fast local NVMe storage, streams the tiles into Azure Blob Storage, and **automatically powers off to stop billing immediately**:
+You can launch an ephemeral **Azure Spot VM** (`Standard_E32s_v5`, 32 vCPUs, 256 GB RAM, ~$0.45/hr) running your Docker container with a single command. The container authenticates **passwordlessly** using an Azure System-Assigned Managed Identity (no storage account keys or secrets), compiles the continents on fast local NVMe storage, streams the tiles into Azure Blob Storage under a date-stamped folder (`<YYYY-MM-DD>/` by default), updates a `latest.txt` pointer, and **automatically powers off to stop billing immediately**:
 
 #### Using Bash / WSL:
 ```bash
@@ -490,7 +490,7 @@ You can launch an ephemeral **Azure Spot VM** (`Standard_E32s_v5`, 32 vCPUs, 256
 ```
 
 > [!TIP]
-> **Container Runtime vs ACI / ACA:** While Azure Container Instances (ACI) and Azure Container Apps (ACA) exist, their 40 GB ephemeral disk limits and lack of fast NVMe storage cause disk exhaustion and severe I/O throttling during Valhalla's millions of `.gph` tile writes on European PBFs (28 GB). Running the Docker image on an ephemeral Spot VM provides dedicated NVMe scratch disk performance, finishes the planet in ~8 hours, and costs only **~$3.60 / month**. See [deploy/azure/README.md](file:///C:/Users/jhees/PycharmProjects/ValhallaRoute/deploy/azure/README.md) for full details.
+> **Historical Reproducibility & Versioning:** Every run preserves its own date-stamped folder (e.g. `az://mystorageaccount/valhalla-tiles/2026-11-16/`). When re-calculating historical trips from previous months, you can point directly to past snapshot dates. When passing `.../latest/`, ValhallaRoute automatically resolves the `latest.txt` pointer to use the newest month's map data. See [deploy/azure/README.md](file:///C:/Users/jhees/PycharmProjects/ValhallaRoute/deploy/azure/README.md) for full details.
 
 ---
 

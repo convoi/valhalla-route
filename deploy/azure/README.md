@@ -64,6 +64,53 @@ docker push myacr.azurecr.io/valhalla-route:latest
 
 ---
 
+## Date-Based Snapshot Versioning & Historical Recalculations
+
+To support monthly updates while allowing historical trips to be recalculated on the exact road network of that time, **all generated tiles are placed into a date-stamped folder by default** (format: `YYYY-MM-DD`, e.g. `2026-11-16`):
+
+```
+az://mystorageaccount/valhalla-tiles/
+├── latest.txt                 # Pointer containing the latest date string, e.g. "2026-11-16"
+├── 2026-10-15/                # October snapshot (reproducible historical map data)
+│   ├── 0/ ...                 # Level 0 tiles
+│   ├── 1/ ...                 # Level 1 tiles
+│   ├── 2/ ...                 # Level 2 tiles & .features.parquet
+│   ├── admin.sqlite
+│   ├── manifest.json
+│   └── logs/build-*.log
+└── 2026-11-16/                # November snapshot
+    ├── 0/ ...
+    ├── 1/ ...
+    ├── 2/ ...
+    ├── admin.sqlite
+    ├── manifest.json
+    └── logs/build-*.log
+```
+
+### Reproducing Historical Analyses
+To enrich or re-calculate historical trips using past map data:
+```python
+from valhallaroute import enrich_gps_points
+
+# Route against exact October 2026 road network
+df = enrich_gps_points(
+    "historical_trip.csv",
+    tile_storage_uri="az://mystorageaccount/valhalla-tiles/2026-10-15/",
+)
+```
+
+### Always Using the Latest Version
+When you specify `.../latest/`, ValhallaRoute automatically reads `latest.txt` and resolves to the most recent snapshot without needing code changes:
+```python
+# Automatically resolves to the newest monthly snapshot
+df = enrich_gps_points(
+    "trip.csv",
+    tile_storage_uri="az://mystorageaccount/valhalla-tiles/latest/",
+)
+```
+
+---
+
 ## What Happens Automatically
 
 1. **Spot VM Provisioned:** Azure launches an Ubuntu 24.04 Spot VM (`Standard_E32s_v5`) with Managed Identity.
@@ -71,9 +118,9 @@ docker push myacr.azurecr.io/valhalla-route:latest
 3. **Container Runs:** The container runs `valhallaroute build-continents`:
    - Downloads `europe-latest.osm.pbf`, compiles Level 0/1/2 routing tiles and companion feature Parquets.
    - Compiles `admin.sqlite` from Geofabrik boundaries.
-   - Uploads compiled tiles directly to `az://mystorageaccount/valhalla-tiles/global/`.
+   - Uploads compiled tiles directly to `az://mystorageaccount/valhalla-tiles/<YYYY-MM-DD>/`.
    - Cleans up scratch disk after each continent, repeating for `north-america`, `south-america`, and `oceania`.
-4. **Log Uploaded:** Container output is saved and uploaded to `az://mystorageaccount/valhalla-tiles/global/logs/build-<timestamp>.log`.
+4. **Log & Pointer Uploaded:** Execution log is uploaded to `<YYYY-MM-DD>/logs/build-<timestamp>.log`, and `latest.txt` is updated in the container root.
 5. **Self-Termination:** VM executes `poweroff` to deallocate and stop billing immediately.
 
 ---
@@ -90,7 +137,18 @@ Download execution log:
 az storage blob download \
   --account-name mystorageaccount \
   -c valhalla-tiles \
-  -n "global/logs/build-<timestamp>.log" \
+  -n "<YYYY-MM-DD>/logs/build-<timestamp>.log" \
   --file build.log \
   --auth-mode login
+```
+
+Check current latest snapshot pointer:
+```bash
+az storage blob download \
+  --account-name mystorageaccount \
+  -c valhalla-tiles \
+  -n "latest.txt" \
+  --file latest.txt \
+  --auth-mode login
+cat latest.txt
 ```
