@@ -1,0 +1,36 @@
+#cloud-config
+package_update: true
+packages:
+  - curl
+  - git
+  - build-essential
+  - python3
+  - python3-pip
+  - ca-certificates
+
+runcmd:
+  # 1. Format and mount fast ephemeral NVMe / temporary SSD disk
+  - mkdir -p /mnt/valhalla_work
+  - chmod 777 /mnt/valhalla_work
+
+  # 2. Install Astral uv for ultra-fast Python execution
+  - curl -LsSf https://astral.sh/uv/install.sh | sh
+  - export PATH="/root/.local/bin:$PATH"
+
+  # 3. Clone repository and install ValhallaRoute
+  - cd /root
+  - git clone https://github.com/convoi/valhalla-route.git valhallaroute-repo
+  - cd valhallaroute-repo
+  - /root/.local/bin/uv pip install -e . --system
+
+  # 4. Run Continental Tile Pack Builder
+  # Replace STORAGE_ACCOUNT and CONTAINER with your actual Azure Blob parameters
+  - |
+    valhallaroute build-continents \
+      --continents europe,north-america,south-america,oceania \
+      --destination-storage az://${AZURE_STORAGE_CONTAINER:-valhalla-tiles}/global/ \
+      --work-dir /mnt/valhalla_work \
+      --build-admins
+
+  # 5. Automatically deallocate/shut down Spot VM upon completion to stop billing
+  - poweroff

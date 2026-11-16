@@ -430,6 +430,52 @@ uv run valhallaroute build-admin -o admin_detailed.sqlite -c NL --admin-levels 2
 
 ---
 
+## Continental Tile Pack Builder (`build-continents`)
+
+For global or multi-continental routing without Level 0/1 tile collisions, ValhallaRoute includes a single-node continental builder. Because continents (Europe, Americas, Oceania) do not share roads, each continent's graph tiles (`.gph`) and companion feature parquets (`.features.parquet`) can be compiled cleanly in sequence on high-speed local NVMe storage and uploaded directly into a shared cloud object storage prefix (Azure Blob Storage, S3, or GCS).
+
+```bash
+# Build Europe, North America, South America, and Oceania into Azure Blob Storage
+valhallaroute build-continents \
+  --continents europe,north-america,south-america,oceania \
+  --destination-storage az://valhalla-tiles/global/ \
+  --work-dir /mnt/nvme/valhalla \
+  --build-admins
+```
+
+### Launching on Azure via Azure CLI (`az cli`)
+
+You can launch an ephemeral **Azure Spot VM** (`Standard_E32s_v5`, ~$0.45/hr) on a monthly cadence using `az cli`. The VM installs ValhallaRoute, downloads extracts, compiles tiles and companion feature parquets, streams them to Azure Blob Storage, and **automatically shuts down / deallocates upon completion**:
+
+```bash
+# Set your target Azure storage account & resource group
+export AZURE_RESOURCE_GROUP="rg-valhalla"
+export AZURE_STORAGE_ACCOUNT="mystorageaccount"
+export AZURE_STORAGE_CONTAINER="valhalla-tiles"
+
+# Launch using the provided deployment script:
+./deploy/azure/launch_spot_builder.sh
+```
+
+Or run the one-line `az cli` command directly:
+
+```bash
+az vm create \
+  --resource-group rg-valhalla \
+  --name valhalla-builder-$(date +%Y%m%d) \
+  --image Ubuntu2404 \
+  --size Standard_E32s_v5 \
+  --priority Spot \
+  --eviction-policy Deallocate \
+  --max-price -1 \
+  --assign-identity [system] \
+  --role "Storage Blob Data Contributor" \
+  --scope $(az storage account show -n mystorageaccount -g rg-valhalla --query id -o tsv) \
+  --custom-data @deploy/azure/cloud-init.yaml
+```
+
+---
+
 ## Running Tests
 
 ```bash

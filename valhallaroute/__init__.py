@@ -24,8 +24,10 @@ from .storage import (
 )
 
 from .admin_builder import build_admin_sqlite_from_overture, wkb_to_spatialite_blob
+from .continents import build_continent_pack
 
 __all__ = [
+    "build_continent_pack",
     "enrich_gps_points",
     "read_gps_csv",
     "lookup_coordinates",

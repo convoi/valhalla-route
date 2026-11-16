@@ -284,6 +284,48 @@ def build_build_admin_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_continent_pack_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="valhallaroute build-continents",
+        description="Compile global/continental Valhalla routing tiles and companion feature parquets on a single node.",
+    )
+    parser.add_argument(
+        "--continents",
+        default="europe,north-america,south-america,oceania",
+        help="Comma-separated continent slugs (e.g. europe,north-america,south-america,oceania or 'all').",
+    )
+    parser.add_argument(
+        "--destination-storage",
+        default="valhalla_tiles_global",
+        help="Target blob storage prefix or local directory (e.g. az://account/container/prefix, s3://..., or path).",
+    )
+    parser.add_argument(
+        "--work-dir",
+        default="./valhalla_continent_work",
+        help="Scratch directory on high-speed local disk/NVMe (default: ./valhalla_continent_work).",
+    )
+    parser.add_argument(
+        "--build-admins",
+        action="store_true",
+        default=True,
+        help="Compile global admin.sqlite from Overture Maps before building tiles (default: True).",
+    )
+    parser.add_argument(
+        "--no-build-admins",
+        dest="build_admins",
+        action="store_false",
+        help="Skip compilation of admin.sqlite.",
+    )
+    parser.add_argument(
+        "--no-cleanup",
+        dest="cleanup_after_continent",
+        action="store_false",
+        default=True,
+        help="Keep downloaded PBFs and generated tiles locally after upload (default: cleans up per continent).",
+    )
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -351,6 +393,24 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as e:
             print(f"Build admin error: {e}", file=sys.stderr)
             return 3
+
+    if argv and argv[0] in ("build-continent-pack", "build-continents"):
+        from .continents import build_continent_pack
+        parser = build_continent_pack_parser()
+        args = parser.parse_args(argv[1:])
+        try:
+            summary = build_continent_pack(
+                continents=args.continents,
+                destination_storage_uri=args.destination_storage,
+                build_admins=args.build_admins,
+                work_dir=args.work_dir,
+                cleanup_after_continent=args.cleanup_after_continent,
+                verbose=True,
+            )
+            return 0
+        except Exception as e:
+            print(f"Continental pack build error: {e}", file=sys.stderr)
+            return 4
 
     # Standard enrichment subcommand or default
     if argv and argv[0] == "enrich":
