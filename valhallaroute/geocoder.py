@@ -146,11 +146,12 @@ except ImportError:
 
 
 class AdminGeocoder:
-    """Thread-safe reverse geocoder querying Valhalla/Overture admin.sqlite via SQLite R-Tree."""
+    """Thread-safe reverse geocoder querying Valhalla/Overture administrative boundaries (SQLite or GeoParquet)."""
 
     def __init__(self, admin_db_path: Path | str | None = None) -> None:
         self.db_path = self._resolve_db_path(admin_db_path)
-        self._geom_cache: dict[int, Any] = {}
+        self.is_parquet = bool(self.db_path and self.db_path.suffix.lower() == ".parquet")
+        self._geom_cache: dict[Any, Any] = {}
         self._cache_lock = threading.Lock()
         self._local = threading.local()
 
@@ -163,6 +164,12 @@ class AdminGeocoder:
             return None
 
         candidates = [
+            Path("valhalla_tiles/admins.parquet"),
+            Path("valhalla_tiles/admin.parquet"),
+            Path("valhalla_tiles_cache/admins.parquet"),
+            Path("valhalla_tiles_cache/admin.parquet"),
+            Path("admins.parquet"),
+            Path("admin.parquet"),
             Path("valhalla_tiles/admin.sqlite"),
             Path("valhalla_tiles_cache/admin.sqlite"),
             Path("valhalla_tiles/admins.sqlite"),
@@ -190,9 +197,23 @@ class AdminGeocoder:
                 return None
         return conn
 
+    def _get_duckdb_connection(self):
+        con = getattr(self._local, "duckdb_conn", None)
+        if con is None:
+            import duckdb
+            con = duckdb.connect()
+            self._local.duckdb_conn = con
+        return con
+
     @property
     def has_admin_db(self) -> bool:
-        """Check whether a valid admin database with tables is available."""
+        """Check whether a valid admin database (SQLite or Parquet) with tables is available."""
+        if not self.db_path or not self.db_path.exists():
+            return False
+
+        if self.is_parquet:
+            return self.db_path.stat().st_size > 0
+
         conn = self._get_connection()
         if not conn:
             return False
@@ -203,6 +224,49 @@ class AdminGeocoder:
             return "admins" in tables and "idx_admins_geom" in tables
         except Exception:
             return False
+
+    def _query_sqlite_candidates(
+        self,
+        min_lon: float,
+        min_lat: float,
+        max_lon: float,
+        max_lat: float,
+    ) -> list[tuple[Any, ...]]:
+        conn = self._get_connection()
+        if not conn:
+            return []
+        cur = conn.cursor()
+        query = """
+        SELECT a.rowid, a.admin_level, a.name, a.iso_code, a.geom,
+               idx.xmin, idx.ymin, idx.xmax, idx.ymax
+        FROM idx_admins_geom idx
+        JOIN admins a ON idx.pkid = a.rowid
+        WHERE idx.xmin <= ? AND idx.xmax >= ?
+          AND idx.ymin <= ? AND idx.ymax >= ?
+        ORDER BY a.admin_level DESC
+        """
+        cur.execute(query, (max_lon, min_lon, max_lat, min_lat))
+        return cur.fetchall()
+
+    def _query_parquet_candidates(
+        self,
+        min_lon: float,
+        min_lat: float,
+        max_lon: float,
+        max_lat: float,
+    ) -> list[tuple[Any, ...]]:
+        con = self._get_duckdb_connection()
+        if not con or not self.db_path:
+            return []
+        p_path = self.db_path.resolve().as_posix().replace("'", "''")
+        query = f"""
+        SELECT division_id, admin_level, name, iso_code, geom, xmin, ymin, xmax, ymax
+        FROM '{p_path}'
+        WHERE xmin <= ? AND xmax >= ?
+          AND ymin <= ? AND ymax >= ?
+        ORDER BY admin_level DESC
+        """
+        return con.execute(query, [max_lon, min_lon, max_lat, min_lat]).fetchall()
 
     def lookup_coordinates(
         self,
@@ -229,8 +293,7 @@ class AdminGeocoder:
             "admin2": None,
         }
 
-        conn = self._get_connection()
-        if not conn or not self.has_admin_db:
+        if not self.has_admin_db:
             return [default_result.copy() for _ in range(len(coords))]
 
         # Deduplicate points using rounded coordinates
@@ -245,52 +308,52 @@ class AdminGeocoder:
                 unique_keys.append(key)
             indices.append(seen[key])
 
-        cur = conn.cursor()
         min_lat = min(k[0] for k in unique_keys)
         max_lat = max(k[0] for k in unique_keys)
         min_lon = min(k[1] for k in unique_keys)
         max_lon = max(k[1] for k in unique_keys)
 
-        query = """
-        SELECT a.rowid, a.admin_level, a.name, a.iso_code, a.geom,
-               idx.xmin, idx.ymin, idx.xmax, idx.ymax
-        FROM idx_admins_geom idx
-        JOIN admins a ON idx.pkid = a.rowid
-        WHERE idx.xmin <= ? AND idx.xmax >= ?
-          AND idx.ymin <= ? AND idx.ymax >= ?
-        ORDER BY a.admin_level DESC
-        """
-        cur.execute(query, (max_lon, min_lon, max_lat, min_lat))
-        raw_candidates = cur.fetchall()
+        if self.is_parquet:
+            raw_candidates = self._query_parquet_candidates(min_lon, min_lat, max_lon, max_lat)
+        else:
+            raw_candidates = self._query_sqlite_candidates(min_lon, min_lat, max_lon, max_lat)
 
         # Prepare geometries once for all candidate admins covering the trajectory
         prepared_candidates = []
-        for rowid, admin_level, name, iso_code, geom_blob, b_xmin, b_ymin, b_xmax, b_ymax in raw_candidates:
+        for cache_key, admin_level, name, iso_code, geom_blob, b_xmin, b_ymin, b_xmax, b_ymax in raw_candidates:
             if not geom_blob:
                 continue
 
-            geom_obj = self._geom_cache.get(rowid)
+            geom_obj = self._geom_cache.get(cache_key)
             if geom_obj is None:
-                rings = parse_spatialite_rings(geom_blob)
                 if HAS_SHAPELY:
-                    polys = []
-                    for r_list in rings:
-                        if r_list:
-                            ext = r_list[0]
-                            holes = r_list[1:] if len(r_list) > 1 else None
-                            polys.append(Polygon(ext, holes))
-                    geom_obj = MultiPolygon(polys) if polys else None
-                    if geom_obj:
+                    try:
+                        geom_obj = shapely.from_wkb(bytes(geom_blob))
                         shapely.prepare(geom_obj)
-                else:
-                    geom_obj = rings
+                    except Exception:
+                        geom_obj = None
+
+                if geom_obj is None:
+                    rings = parse_spatialite_rings(geom_blob)
+                    if HAS_SHAPELY:
+                        polys = []
+                        for r_list in rings:
+                            if r_list:
+                                ext = r_list[0]
+                                holes = r_list[1:] if len(r_list) > 1 else None
+                                polys.append(Polygon(ext, holes))
+                        geom_obj = MultiPolygon(polys) if polys else None
+                        if geom_obj:
+                            shapely.prepare(geom_obj)
+                    else:
+                        geom_obj = rings
 
                 with self._cache_lock:
-                    self._geom_cache[rowid] = geom_obj
+                    self._geom_cache[cache_key] = geom_obj
 
             if geom_obj is not None:
                 prepared_candidates.append(
-                    (rowid, admin_level, name, iso_code, geom_obj, (b_xmin, b_ymin, b_xmax, b_ymax))
+                    (cache_key, admin_level, name, iso_code, geom_obj, (b_xmin, b_ymin, b_xmax, b_ymax))
                 )
 
         unique_results: list[dict[str, Any]] = []

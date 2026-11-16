@@ -86,6 +86,7 @@ def run_benchmark(
     csv_file: Path | str = "hannover_table.csv",
     tile_extract: Path | str = "valhalla_tiles.tar",
     osm_pbf: Path | str = "osm_data/Hannover.osm.pbf",
+    admin_db: Path | str | None = None,
     output_csv: Path | str | None = None,
     benchmark_csv: Path | str | None = "benchmark_versions.csv",
 ) -> dict[str, float]:
@@ -100,6 +101,8 @@ def run_benchmark(
     print(f"Dataset:       {csv_path} ({csv_path.stat().st_size / (1024 * 1024):.2f} MB)")
     print(f"Tiles extract: {tile_extract}")
     print(f"OSM PBF:       {osm_pbf}")
+    if admin_db:
+        print(f"Admin DB:      {admin_db}")
     print("-" * 70)
 
     timings: dict[str, float] = {}
@@ -128,7 +131,7 @@ def run_benchmark(
     # 3. Offline Reverse Geocoding
     t0 = time.perf_counter()
     coords = list(zip(lats, lons))
-    geocoded = lookup_coordinates(coords)
+    geocoded = lookup_coordinates(coords, admin_db_path=admin_db)
     t1 = time.perf_counter()
     timings["reverse_geocoding"] = t1 - t0
     print(f"3. Reverse Geocoding:           {timings['reverse_geocoding']:.4f}s  ({len(geocoded):,} coordinates)")
@@ -141,6 +144,7 @@ def run_benchmark(
         csv_input=csv_path,
         tile_extract=tile_extract,
         osm_pbf=osm_pbf,
+        admin_db_path=admin_db,
         verbose=False,
     )
     t1 = time.perf_counter()
@@ -180,6 +184,7 @@ def main() -> int:
     parser.add_argument("input_csv", nargs="?", default="hannover_table.csv", help="Input GPS CSV file.")
     parser.add_argument("--tile-extract", default="valhalla_tiles.tar", help="Valhalla tile extract .tar.")
     parser.add_argument("--osm-pbf", default="osm_data/Hannover.osm.pbf", help="OSM .osm.pbf file.")
+    parser.add_argument("--admin-db", default=None, help="Explicit admin database (.sqlite or .parquet).")
     parser.add_argument("-o", "--output", dest="output_csv", help="Optional output CSV path.")
     parser.add_argument("--benchmark-csv", default="benchmark_versions.csv", help="CSV file to record version benchmark results.")
 
@@ -189,6 +194,7 @@ def main() -> int:
             csv_file=args.input_csv,
             tile_extract=args.tile_extract,
             osm_pbf=args.osm_pbf,
+            admin_db=args.admin_db,
             output_csv=args.output_csv,
             benchmark_csv=args.benchmark_csv,
         )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import sqlite3
 import struct
 from pathlib import Path
@@ -222,6 +223,7 @@ def build_admin_sqlite_from_overture(
     release: str = "2026-10-21.0",
     s3_region: str = "us-west-2",
     include_maritime: bool = True,
+    simplify_tolerance: Optional[float] = None,
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """Build a Valhalla-compliant admin.sqlite from Overture Maps GeoParquet divisions data.
@@ -290,13 +292,18 @@ def build_admin_sqlite_from_overture(
 
     where_stmt = " AND ".join(where_clauses)
 
+    if simplify_tolerance and simplify_tolerance > 0:
+        geom_expr = f"ST_SimplifyPreserveTopology(ST_Union_Agg(geometry), {float(simplify_tolerance)})"
+    else:
+        geom_expr = "ST_Union_Agg(geometry)"
+
     query = f"""
     SELECT 
         division_id,
         subtype,
         country,
-        names.primary AS name,
-        COALESCE(names.common['en'], names.primary) AS name_en,
+        primary_name AS name,
+        name_en,
         ST_XMin(geom) AS minx,
         ST_YMin(geom) AS miny,
         ST_XMax(geom) AS maxx,
@@ -308,7 +315,9 @@ def build_admin_sqlite_from_overture(
             subtype,
             country,
             names,
-            ST_Union_Agg(geometry) AS geom
+            names.primary AS primary_name,
+            COALESCE(names.common['en'], names.primary) AS name_en,
+            {geom_expr} AS geom
         FROM read_parquet('s3://overturemaps-us-west-2/release/{release}/theme=divisions/type=division_area/*', hive_partitioning=1)
         WHERE {where_stmt}
         GROUP BY division_id, subtype, country, names
@@ -451,3 +460,201 @@ def build_admin_sqlite_from_overture(
         )
 
     return stats
+
+
+def build_admin_parquet_from_overture(
+    output_path: Union[str, Path],
+    countries: Optional[Sequence[str]] = None,
+    admin_levels: Optional[Sequence[int]] = None,
+    bbox: Optional[tuple[float, float, float, float]] = None,
+    release: str = "2026-10-21.0",
+    s3_region: str = "us-west-2",
+    include_maritime: bool = True,
+    simplify_tolerance: Optional[float] = 0.0001,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """Build a compact, ZSTD-compressed GeoParquet administrative database from Overture Maps.
+
+    Args:
+        output_path: Destination path for admins.parquet.
+        countries: Optional list of ISO-3166-1 alpha-2 codes (e.g. ['NL', 'DE', 'BE']). None = planet.
+        admin_levels: Sequence of admin levels (default: [2, 4, 6, 8]).
+        bbox: Optional (minx, miny, maxx, maxy) geographic bounding box filter.
+        release: Overture Maps release string.
+        s3_region: AWS region for Overture public S3 bucket.
+        include_maritime: Whether to dissolve maritime territorial bounds with land. Default: True.
+        simplify_tolerance: Douglas-Peucker simplification tolerance in degrees (default: 0.0001 ~10m).
+        verbose: Print progress logs.
+
+    Returns:
+        Summary dict containing statistics about created admin records.
+    """
+    import duckdb
+
+    output_path = Path(output_path).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if admin_levels is None:
+        admin_levels = [2, 4, 6, 8]
+
+    subtypes: List[str] = []
+    for lvl in admin_levels:
+        subtypes.extend(ADMIN_LEVEL_TO_SUBTYPES.get(lvl, []))
+
+    if not subtypes:
+        raise ValueError(f"No valid subtypes found for admin_levels: {admin_levels}")
+
+    if verbose:
+        logger.info(f"Connecting to DuckDB for Overture GeoParquet export (release {release})...")
+
+    con = duckdb.connect()
+    con.execute(f"PRAGMA threads = {os.cpu_count() or 8};")
+    con.execute("PRAGMA preserve_insertion_order = false;")
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute("INSTALL spatial; LOAD spatial;")
+    con.execute(f"""
+    CREATE OR REPLACE SECRET overture_secret (
+        TYPE S3,
+        PROVIDER config,
+        REGION '{s3_region}',
+        SCOPE 's3://overturemaps-us-west-2'
+    );
+    """)
+
+    where_clauses = []
+    subtypes_sql = ", ".join(f"'{s}'" for s in subtypes)
+    where_clauses.append(f"subtype IN ({subtypes_sql})")
+
+    if not include_maritime:
+        where_clauses.append("class = 'land'")
+
+    if countries:
+        countries_cleaned = [c.upper().strip() for c in countries]
+        countries_sql = ", ".join(f"'{c}'" for c in countries_cleaned)
+        where_clauses.append(f"country IN ({countries_sql})")
+
+    if bbox:
+        b_minx, b_miny, b_maxx, b_maxy = bbox
+        where_clauses.append(
+            f"bbox.xmin <= {b_maxx} AND bbox.xmax >= {b_minx} AND bbox.ymin <= {b_maxy} AND bbox.ymax >= {b_miny}"
+        )
+
+    where_stmt = " AND ".join(where_clauses)
+
+    if simplify_tolerance and simplify_tolerance > 0:
+        geom_expr = f"ST_SimplifyPreserveTopology(ST_Union_Agg(geometry), {float(simplify_tolerance)})"
+    else:
+        geom_expr = "ST_Union_Agg(geometry)"
+
+    out_posix = output_path.as_posix().replace("'", "''")
+    query = f"""
+    COPY (
+        SELECT 
+            division_id,
+            CASE subtype
+                WHEN 'country' THEN 2
+                WHEN 'region' THEN 4
+                WHEN 'county' THEN 6
+                ELSE 8
+            END AS admin_level,
+            country AS iso_code,
+            primary_name AS name,
+            name_en,
+            ST_XMin(geom) AS xmin,
+            ST_YMin(geom) AS ymin,
+            ST_XMax(geom) AS xmax,
+            ST_YMax(geom) AS ymax,
+            ST_AsWKB(geom) AS geom
+        FROM (
+            SELECT 
+                division_id,
+                subtype,
+                country,
+                names,
+                names.primary AS primary_name,
+                COALESCE(names.common['en'], names.primary) AS name_en,
+                {geom_expr} AS geom
+            FROM read_parquet('s3://overturemaps-us-west-2/release/{release}/theme=divisions/type=division_area/*', hive_partitioning=1)
+            WHERE {where_stmt}
+            GROUP BY division_id, subtype, country, names
+        )
+        ORDER BY admin_level, country, name
+    ) TO '{out_posix}' (FORMAT PARQUET, COMPRESSION ZSTD);
+    """
+
+    if verbose:
+        logger.info(f"Exporting administrative GeoParquet to {output_path.name}...")
+
+    con.execute(query)
+
+    stats_query = f"""
+    SELECT 
+        admin_level,
+        count(*) AS cnt
+    FROM '{out_posix}'
+    GROUP BY admin_level;
+    """
+    rows = con.execute(stats_query).fetchall()
+    total_records = sum(r[1] for r in rows)
+    by_level = {r[0]: r[1] for r in rows}
+
+    distinct_countries = con.execute(
+        f"SELECT DISTINCT iso_code FROM '{out_posix}' WHERE iso_code IS NOT NULL;"
+    ).fetchall()
+    countries_list = sorted([c[0] for c in distinct_countries if c[0]])
+
+    stats = {
+        "output_path": str(output_path),
+        "total_records": total_records,
+        "by_admin_level": by_level,
+        "countries": countries_list,
+        "file_size_bytes": output_path.stat().st_size,
+    }
+
+    if verbose:
+        logger.info(
+            f"Successfully compiled {output_path.name}: {stats['total_records']} admins "
+            f"({stats['file_size_bytes'] / (1024 * 1024):.2f} MB) across {len(stats['countries'])} countries."
+        )
+
+    con.close()
+    return stats
+
+
+def build_admin(
+    output_path: Union[str, Path],
+    countries: Optional[Sequence[str]] = None,
+    admin_levels: Optional[Sequence[int]] = None,
+    bbox: Optional[tuple[float, float, float, float]] = None,
+    release: str = "2026-10-21.0",
+    s3_region: str = "us-west-2",
+    include_maritime: bool = True,
+    simplify_tolerance: Optional[float] = None,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """Unified admin builder supporting both SpatiaLite (.sqlite) and GeoParquet (.parquet)."""
+    p = Path(output_path)
+    if p.suffix.lower() == ".parquet":
+        return build_admin_parquet_from_overture(
+            output_path=p,
+            countries=countries,
+            admin_levels=admin_levels,
+            bbox=bbox,
+            release=release,
+            s3_region=s3_region,
+            include_maritime=include_maritime,
+            simplify_tolerance=simplify_tolerance if simplify_tolerance is not None else 0.0001,
+            verbose=verbose,
+        )
+    return build_admin_sqlite_from_overture(
+        output_path=p,
+        countries=countries,
+        admin_levels=admin_levels,
+        bbox=bbox,
+        release=release,
+        s3_region=s3_region,
+        include_maritime=include_maritime,
+        simplify_tolerance=simplify_tolerance,
+        verbose=verbose,
+    )
+

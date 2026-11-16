@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .admin_builder import build_admin_sqlite_from_overture
+from .admin_builder import build_admin, build_admin_sqlite_from_overture
 from .enricher import enrich_gps_points
 from .storage import StorageManager, uri_to_local_path
 
@@ -128,7 +128,7 @@ def build_build_admin_parser() -> argparse.ArgumentParser:
         "-o", "--output",
         dest="output",
         default="admin.sqlite",
-        help="Destination path for compiled admin.sqlite (default: admin.sqlite).",
+        help="Destination path for compiled admin database (.sqlite or .parquet) (default: admin.sqlite).",
     )
     parser.add_argument(
         "-c", "--countries",
@@ -141,6 +141,13 @@ def build_build_admin_parser() -> argparse.ArgumentParser:
         dest="admin_levels",
         default="2,4",
         help="Comma-separated administrative levels to include: 2 (country), 4 (region/state), 6 (county), 8 (city) (default: 2,4).",
+    )
+    parser.add_argument(
+        "--simplify",
+        dest="simplify",
+        type=float,
+        default=None,
+        help="Douglas-Peucker simplification tolerance in degrees (e.g. 0.0001 ~10m). Strongly recommended for GeoParquet.",
     )
     parser.add_argument(
         "--release",
@@ -215,13 +222,14 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv[1:])
         levels = [int(lvl.strip()) for lvl in args.admin_levels.split(",") if lvl.strip()]
         try:
-            stats = build_admin_sqlite_from_overture(
+            stats = build_admin(
                 output_path=args.output,
                 countries=args.countries,
                 admin_levels=levels,
                 release=args.release,
                 s3_region=args.s3_region,
                 include_maritime=not args.no_maritime,
+                simplify_tolerance=args.simplify,
                 verbose=True,
             )
             print(

@@ -902,7 +902,7 @@ def enrich_gps_points(
             search_candidates.extend([Path("valhalla_tiles"), Path("valhalla_tiles_cache")])
 
             for cand_dir in search_candidates:
-                for fname in ("admin.sqlite", "admins.sqlite"):
+                for fname in ("admins.parquet", "admin.parquet", "admin.sqlite", "admins.sqlite"):
                     cand_p = cand_dir / fname
                     if cand_p.exists() and cand_p.stat().st_size > 0:
                         resolved_admin_db = cand_p

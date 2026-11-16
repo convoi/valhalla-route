@@ -179,3 +179,87 @@ def test_lookup_coordinates_missing_db(tmp_path: Path):
     assert len(results) == 2
     assert results[0]["city"] is None
     assert results[0]["country_code"] is None
+
+
+@pytest.fixture
+def synthetic_admin_parquet(tmp_path: Path) -> Path:
+    import duckdb
+
+    parquet_file = tmp_path / "test_admins.parquet"
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+
+    con.execute("""
+    CREATE TABLE admins_staging AS
+    SELECT 
+        'div_country' AS division_id,
+        2 AS admin_level,
+        'DE' AS iso_code,
+        'Deutschland' AS name,
+        'Germany' AS name_en,
+        6.0 AS xmin,
+        47.0 AS ymin,
+        15.0 AS xmax,
+        55.0 AS ymax,
+        ST_AsWKB(ST_GeomFromText('POLYGON ((6.0 47.0, 15.0 47.0, 15.0 55.0, 6.0 55.0, 6.0 47.0))')) AS geom
+    UNION ALL
+    SELECT
+        'div_state' AS division_id,
+        4 AS admin_level,
+        'DE' AS iso_code,
+        'Niedersachsen' AS name,
+        'Lower Saxony' AS name_en,
+        8.0 AS xmin,
+        51.3 AS ymin,
+        11.5 AS xmax,
+        53.9 AS ymax,
+        ST_AsWKB(ST_GeomFromText('POLYGON ((8.0 51.3, 11.5 51.3, 11.5 53.9, 8.0 53.9, 8.0 51.3))')) AS geom
+    UNION ALL
+    SELECT
+        'div_city' AS division_id,
+        8 AS admin_level,
+        'DE' AS iso_code,
+        'Hannover' AS name,
+        'Hanover' AS name_en,
+        9.6 AS xmin,
+        52.3 AS ymin,
+        9.9 AS xmax,
+        52.5 AS ymax,
+        ST_AsWKB(ST_GeomFromText('POLYGON ((9.6 52.3, 9.9 52.3, 9.9 52.5, 9.6 52.5, 9.6 52.3))')) AS geom
+    ;
+    """)
+    p_path = parquet_file.as_posix().replace("'", "''")
+    con.execute(f"COPY admins_staging TO '{p_path}' (FORMAT PARQUET);")
+    con.close()
+    return parquet_file
+
+
+def test_admin_geocoder_parquet_lookup(synthetic_admin_parquet: Path):
+    geocoder = AdminGeocoder(admin_db_path=synthetic_admin_parquet)
+    assert geocoder.has_admin_db is True
+    assert geocoder.is_parquet is True
+
+    coords = [
+        (52.37, 9.74),
+        (52.8, 9.5),
+        (45.0, 2.0),
+    ]
+    results = geocoder.lookup_coordinates(coords)
+    assert len(results) == 3
+
+    # Inside Hannover
+    assert results[0]["city"] == "Hannover"
+    assert results[0]["admin1"] == "Niedersachsen"
+    assert results[0]["country_code"] == "DE"
+    assert results[0]["country"] == "Deutschland"
+
+    # Outside Hannover, inside Niedersachsen
+    assert results[1]["city"] is None
+    assert results[1]["admin1"] == "Niedersachsen"
+    assert results[1]["country_code"] == "DE"
+
+    # Outside Germany
+    assert results[2]["city"] is None
+    assert results[2]["admin1"] is None
+    assert results[2]["country_code"] is None
+

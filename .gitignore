@@ -24,6 +24,10 @@ osm_data/
 *.pbf
 *.gph
 valhalla.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.parquet
 
 # Large generated outputs
 output_enriched.csv
