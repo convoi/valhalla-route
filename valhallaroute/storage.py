@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import io
 import math
+import os
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
@@ -139,9 +140,45 @@ class StorageManager:
             prefix = parsed.path.lstrip("/")
             return obs.store.GCSStore(bucket=bucket, **options), prefix
         elif scheme in ("az", "azure", "abfs"):
-            container = parsed.netloc
-            prefix = parsed.path.lstrip("/")
-            return obs.store.AzureStore(container=container, **options), prefix
+            # Flexible Azure Blob / ADLS Gen2 URL resolution:
+            # 1. abfs://container@account.dfs.core.windows.net/prefix
+            # 2. az://account.blob.core.windows.net/container/prefix
+            # 3. az://account/container/prefix
+            # 4. az://container/prefix (with AZURE_STORAGE_ACCOUNT / AZURE_STORAGE_ACCOUNT_NAME in env or options)
+            account_name = (
+                options.pop("account_name", None)
+                or options.pop("account", None)
+                or os.environ.get("AZURE_STORAGE_ACCOUNT")
+                or os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+            )
+            netloc = parsed.netloc
+            raw_path = parsed.path.lstrip("/")
+
+            if "@" in netloc:
+                container, host = netloc.split("@", 1)
+                if not account_name:
+                    account_name = host.split(".")[0]
+                prefix = raw_path
+            elif ".blob.core.windows.net" in netloc or ".dfs.core.windows.net" in netloc:
+                if not account_name:
+                    account_name = netloc.split(".")[0]
+                parts = raw_path.split("/", 1)
+                container = parts[0]
+                prefix = parts[1] if len(parts) > 1 else ""
+            else:
+                if account_name:
+                    container = netloc
+                    prefix = raw_path
+                else:
+                    parts = raw_path.split("/", 1)
+                    account_name = netloc
+                    container = parts[0] if parts else ""
+                    prefix = parts[1] if len(parts) > 1 else ""
+
+            store_kwargs = dict(options)
+            if account_name:
+                store_kwargs["account_name"] = account_name
+            return obs.store.AzureStore(container_name=container, **store_kwargs), prefix
         elif scheme == "memory":
             prefix = parsed.path.lstrip("/")
             return obs.store.MemoryStore(), prefix

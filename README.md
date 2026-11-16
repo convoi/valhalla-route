@@ -171,6 +171,28 @@ df = enrich_gps_points(io.StringIO(csv_content), tile_extract="valhalla_tiles.ta
 
 ---
 
+### 4. Fast Offline Reverse Geocoding (`AdminGeocoder`)
+
+ValhallaRoute includes a high-throughput, 100% offline reverse geocoder backed by `admin.sqlite` (compiled from Overture Maps / OSM administrative boundaries):
+* **Thread-Safe & Process-Safe:** Read-only SQLite with R-tree spatial index (`idx_admins_geom`).
+* **Ultra-Fast:** Over 610,000 points/second using vectorized Shapely C-acceleration and bounding-box candidate pre-filtering (8.6x faster than legacy `reverse_geocoder`).
+* **Hierarchical Resolution:** Resolves country, ISO-3166 code, state/province, county, and municipality/borough.
+
+```python
+from valhallaroute import AdminGeocoder, enrich_gps_points
+
+# Direct geocoding lookup
+geocoder = AdminGeocoder("admin.sqlite")
+info = geocoder.lookup(52.3759, 9.7320)
+print(info)
+# {'country': 'Germany', 'country_code': 'DE', 'state': 'Niedersachsen', 'city': 'Hannover'}
+
+# Used automatically during GPS point enrichment
+df = enrich_gps_points("trip.csv", admin_db_path="admin.sqlite")
+```
+
+---
+
 ## Command Line Interface (CLI)
 
 ```bash
@@ -443,36 +465,32 @@ valhallaroute build-continents \
   --build-admins
 ```
 
-### Launching on Azure via Azure CLI (`az cli`)
+### Automated Monthly Build via Docker & Azure Managed Identity
 
-You can launch an ephemeral **Azure Spot VM** (`Standard_E32s_v5`, ~$0.45/hr) on a monthly cadence using `az cli`. The VM installs ValhallaRoute, downloads extracts, compiles tiles and companion feature parquets, streams them to Azure Blob Storage, and **automatically shuts down / deallocates upon completion**:
+You can launch an ephemeral **Azure Spot VM** (`Standard_E32s_v5`, 32 vCPUs, 256 GB RAM, ~$0.45/hr) running your Docker container with a single command. The container authenticates **passwordlessly** using an Azure System-Assigned Managed Identity (no storage account keys or secrets), compiles the continents on fast local NVMe storage, streams the tiles into Azure Blob Storage, and **automatically powers off to stop billing immediately**:
 
+#### Using Bash / WSL:
 ```bash
-# Set your target Azure storage account & resource group
-export AZURE_RESOURCE_GROUP="rg-valhalla"
-export AZURE_STORAGE_ACCOUNT="mystorageaccount"
-export AZURE_STORAGE_CONTAINER="valhalla-tiles"
-
-# Launch using the provided deployment script:
-./deploy/azure/launch_spot_builder.sh
-```
-
-Or run the one-line `az cli` command directly:
-
-```bash
-az vm create \
+./deploy/azure/launch_docker_spot_builder.sh \
+  --image myacr.azurecr.io/valhalla-route:latest \
+  --storage-account mystorageaccount \
+  --container valhalla-tiles \
   --resource-group rg-valhalla \
-  --name valhalla-builder-$(date +%Y%m%d) \
-  --image Ubuntu2404 \
-  --size Standard_E32s_v5 \
-  --priority Spot \
-  --eviction-policy Deallocate \
-  --max-price -1 \
-  --assign-identity [system] \
-  --role "Storage Blob Data Contributor" \
-  --scope $(az storage account show -n mystorageaccount -g rg-valhalla --query id -o tsv) \
-  --custom-data @deploy/azure/cloud-init.yaml
+  --acr-name myacr
 ```
+
+#### Using PowerShell (Windows / pwsh):
+```powershell
+.\deploy\azure\launch_docker_spot_builder.ps1 `
+  -Image "myacr.azurecr.io/valhalla-route:latest" `
+  -StorageAccount "mystorageaccount" `
+  -Container "valhalla-tiles" `
+  -ResourceGroup "rg-valhalla" `
+  -AcrName "myacr"
+```
+
+> [!TIP]
+> **Container Runtime vs ACI / ACA:** While Azure Container Instances (ACI) and Azure Container Apps (ACA) exist, their 40 GB ephemeral disk limits and lack of fast NVMe storage cause disk exhaustion and severe I/O throttling during Valhalla's millions of `.gph` tile writes on European PBFs (28 GB). Running the Docker image on an ephemeral Spot VM provides dedicated NVMe scratch disk performance, finishes the planet in ~8 hours, and costs only **~$3.60 / month**. See [deploy/azure/README.md](file:///C:/Users/jhees/PycharmProjects/ValhallaRoute/deploy/azure/README.md) for full details.
 
 ---
 

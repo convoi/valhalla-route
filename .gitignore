@@ -60,3 +60,6 @@ Desktop.ini
 # Demo and benchmark datasets
 hannover_table.csv
 hannover_table*.csv
+
+# Scratch and temporary scripts
+scratch/

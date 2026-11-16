@@ -122,3 +122,22 @@ def test_storage_manager_list_files(tmp_path: Path):
     assert "folder1/file1.txt" in f1_files
     assert "folder1/file2.txt" in f1_files
     assert "folder2/file3.txt" not in f1_files
+
+
+def test_storage_manager_azure_urls(monkeypatch):
+    monkeypatch.delenv("AZURE_STORAGE_ACCOUNT", raising=False)
+    monkeypatch.delenv("AZURE_STORAGE_ACCOUNT_NAME", raising=False)
+
+    # 1. az://account/container/prefix
+    mgr1 = StorageManager("az://myaccount/mycontainer/tiles")
+    assert mgr1.prefix == "tiles"
+
+    # 2. az://container/prefix with env var
+    monkeypatch.setenv("AZURE_STORAGE_ACCOUNT", "myenvaccount")
+    mgr2 = StorageManager("az://mycontainer/global")
+    assert mgr2.prefix == "global"
+
+    # 3. abfs://container@account.dfs.core.windows.net/prefix
+    mgr3 = StorageManager("abfs://mycontainer@myadlsaccount.dfs.core.windows.net/output")
+    assert mgr3.prefix == "output"
+
