@@ -246,48 +246,61 @@ class AdminGeocoder:
             indices.append(seen[key])
 
         cur = conn.cursor()
+        min_lat = min(k[0] for k in unique_keys)
+        max_lat = max(k[0] for k in unique_keys)
+        min_lon = min(k[1] for k in unique_keys)
+        max_lon = max(k[1] for k in unique_keys)
+
         query = """
-        SELECT a.rowid, a.admin_level, a.name, a.iso_code, a.geom
+        SELECT a.rowid, a.admin_level, a.name, a.iso_code, a.geom,
+               idx.xmin, idx.ymin, idx.xmax, idx.ymax
         FROM idx_admins_geom idx
         JOIN admins a ON idx.pkid = a.rowid
         WHERE idx.xmin <= ? AND idx.xmax >= ?
           AND idx.ymin <= ? AND idx.ymax >= ?
         ORDER BY a.admin_level DESC
         """
+        cur.execute(query, (max_lon, min_lon, max_lat, min_lat))
+        raw_candidates = cur.fetchall()
+
+        # Prepare geometries once for all candidate admins covering the trajectory
+        prepared_candidates = []
+        for rowid, admin_level, name, iso_code, geom_blob, b_xmin, b_ymin, b_xmax, b_ymax in raw_candidates:
+            if not geom_blob:
+                continue
+
+            geom_obj = self._geom_cache.get(rowid)
+            if geom_obj is None:
+                rings = parse_spatialite_rings(geom_blob)
+                if HAS_SHAPELY:
+                    polys = []
+                    for r_list in rings:
+                        if r_list:
+                            ext = r_list[0]
+                            holes = r_list[1:] if len(r_list) > 1 else None
+                            polys.append(Polygon(ext, holes))
+                    geom_obj = MultiPolygon(polys) if polys else None
+                    if geom_obj:
+                        shapely.prepare(geom_obj)
+                else:
+                    geom_obj = rings
+
+                with self._cache_lock:
+                    self._geom_cache[rowid] = geom_obj
+
+            if geom_obj is not None:
+                prepared_candidates.append(
+                    (rowid, admin_level, name, iso_code, geom_obj, (b_xmin, b_ymin, b_xmax, b_ymax))
+                )
 
         unique_results: list[dict[str, Any]] = []
 
         for lat, lon in unique_keys:
             res = default_result.copy()
-            # x is longitude, y is latitude
-            cur.execute(query, (lon, lon, lat, lat))
-            candidates = cur.fetchall()
 
-            for rowid, admin_level, name, iso_code, geom_blob in candidates:
-                if not geom_blob:
-                    continue
-
-                # Retrieve or parse geometry
-                geom_obj = self._geom_cache.get(rowid)
-                if geom_obj is None:
-                    rings = parse_spatialite_rings(geom_blob)
-                    if HAS_SHAPELY:
-                        polys = []
-                        for r_list in rings:
-                            if r_list:
-                                ext = r_list[0]
-                                holes = r_list[1:] if len(r_list) > 1 else None
-                                polys.append(Polygon(ext, holes))
-                        geom_obj = MultiPolygon(polys) if polys else None
-                        if geom_obj:
-                            shapely.prepare(geom_obj)
-                    else:
-                        geom_obj = rings
-
-                    with self._cache_lock:
-                        self._geom_cache[rowid] = geom_obj
-
-                if geom_obj is None:
+            for rowid, admin_level, name, iso_code, geom_obj, (b_minx, b_miny, b_maxx, b_maxy) in prepared_candidates:
+                # Fast MBR filter
+                if not (b_minx <= lon <= b_maxx and b_miny <= lat <= b_maxy):
                     continue
 
                 if HAS_SHAPELY:
