@@ -3,20 +3,39 @@
 A Python tool that enriches ordered GPS trip points from CSV using Valhalla map matching and offline reverse geocoding.
 
 The resulting pandas DataFrame includes all original columns plus the enriched attributes:
+* **`valhalla_type`** (`str`): Match status (`matched`, `interpolated`, or `unmatched`).
+* **`road_name`** (`str`): Name of the road (e.g. `Alt-Vinnhorst`, `Bothfelder Straße`, `A 2`).
+* **`road_type`** (`str`): Road classification (`motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `residential`, `service_other`, etc.).
+* **`distance_to_next_intersection`** (`float` | `None`): Distance in meters along the road segment to the upcoming intersection node.
+* **`intersection_edge_count`** (`int` | `None`): Number of road legs meeting at the upcoming intersection (e.g. 3 for T-junction, 4 for crossroad).
+* **`has_stop_sign`** (`bool`): Whether the point is approaching or stopped at a stop sign.
+* **`has_yield_sign`** (`bool`): Whether the point is approaching or stopped at a give-way / yield sign.
+* **`has_traffic_signal`** (`bool`): Proximity to traffic lights.
+* **`is_crossing`** (`bool`): Proximity to a pedestrian, bicycle, or railroad crossing.
+* **`crossing_type`** (`str` | `None`): Classification of crossing (e.g. `traffic_signals`, `zebra`, `unmarked`).
+* **`curvature`** (`int` | `None`): Valhalla road curvature index (0–15).
+* **`lane_count`** (`int` | `None`): Number of traffic lanes on the matched road segment.
+* **`is_turn`** (`bool`): Whether a turning maneuver occurs.
+* **`turn_direction`** (`str`): Turn direction (`straight`, `slight_right`, `right`, `sharp_right`, `u_turn`, etc.).
+* **`turn_angle`** (`float`): Absolute turn angle between consecutive segments in degrees (0–180°).
+* **`is_roundabout`** (`bool`): Whether the road segment is part of a traffic circle / roundabout.
+* **`roundabout_action`** (`str` | `None`): Action at roundabout (`entering`, `exiting`, `inside`).
 * **`is_tunnel`** (`bool`): Whether the point is located inside a tunnel.
 * **`is_bridge`** (`bool`): Whether the point is located on a bridge.
-* **`is_crossing`** (`bool`): Whether the point represents a country border crossing or pedestrian crossing.
-* **`is_roundabout`** (`bool`): Whether the road segment is part of a traffic circle / roundabout.
-* **`is_on_ramp`** (`bool`): Whether the road segment is a highway entrance on-ramp (link).
-* **`is_exit_ramp`** (`bool`): Whether the road segment is a highway exit ramp (link).
-* **`lanes`** (`int` | `None`): Number of traffic lanes on the matched road segment.
-* **`turn_degree`** (`float`): Absolute turn angle between consecutive segments in degrees (0–180°).
-* **`turn_direction`** (`str`): Categorized turn direction (`straight`, `slight_right`, `right`, `sharp_right`, `u_turn`, `slight_left`, `left`, `sharp_left`).
-* **`valhalla_type`** (`str`): Match status (`matched`, `interpolated`, or `unmatched`).
 * **`city`** (`str`): Resolved city / municipality name.
 * **`country`** (`str`): Country name (e.g., from Valhalla administrative bounds or ISO code).
-* **`road_name`** (`str`): Name of the road (e.g. `Karl-Liebknecht-Straße`, `A 2`).
-* **`road_type`** (`str`): Road classification (`motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `residential`, `service_other`, etc.).
+
+### Enriched Result Excerpt
+
+Below is an excerpt of real rows from our benchmark trip dataset (`hannover_table.csv`) showing how Valhalla map-matching and companion feature tiles resolve complex urban driving contexts:
+
+| road_name | road_type | dist_to_intersection | intersection_edges | stop_sign | yield_sign | traffic_signal | is_crossing (type) | curvature | turn_direction | city |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- | :---: | :--- | :--- |
+| **Alt-Vinnhorst** | tertiary | `0.0 m` | 3-way | **True** | False | False | False | 3 | straight | Langenhagen |
+| **Godshorner Str.** | secondary | `5.7 m` | 3-way | False | **True** | False | **True** (`unmarked`) | 0 | straight | Langenhagen |
+| **Bothfelder Str.** | secondary | `9.0 m` | 4-way | False | False | **True** | **True** (`traffic_signals`) | 0 | straight | Langenhagen |
+| **Engelbosteler Damm** | residential | `5.0 m` | 4-way | False | **True** | **True** | **True** (`traffic_signals`) | 15 (sharp) | slight_right | Hannover |
+| **Weidetorkreisel** | secondary | `70.3 m` | 4-way | False | False | False | False | 15 (circle) | entering *(roundabout)* | Hannover |
 
 ---
 
