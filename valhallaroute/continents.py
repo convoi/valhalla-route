@@ -8,7 +8,10 @@ import shutil
 import time
 from typing import Any, Sequence
 
-from .admin_builder import build_admin_sqlite_from_overture
+from .admin_builder import (
+    build_admin_parquet_from_overture,
+    build_admin_sqlite_from_overture,
+)
 from .storage import StorageManager, uri_to_local_path
 from .tile_manager import build_valhalla_tiles, download_file
 
@@ -98,31 +101,54 @@ def build_continent_pack(
         print(f"Cleanup After Upload:  {cleanup_after_continent}")
         print("=" * 70)
 
-    # 1. Compile and upload global admin.sqlite
+    # 1. Compile and upload global administrative databases:
+    #    a) admin.sqlite (Levels 2+4) strictly for Valhalla C++ routing tile compilation
+    #    b) admins.parquet (Levels 2,4,6,8) for fine-grained offline reverse geocoding
     local_admin_db: Path | None = None
+    local_admin_parquet: Path | None = None
     if build_admins:
         local_admin_db = root_work / "admin.sqlite"
+        local_admin_parquet = root_work / "admins.parquet"
+
         if verbose:
-            print("\n[Step 1/3] Compiling Global admin.sqlite from Overture Maps GeoParquet...")
+            print("\n[Step 1a/3] Compiling Valhalla admin.sqlite (Levels 2+4) from Overture Maps...")
         t_admin = time.time()
         build_admin_sqlite_from_overture(
             output_path=local_admin_db,
             countries=admin_countries,
-            admin_levels=admin_levels,
+            admin_levels=[2, 4],
             verbose=verbose,
         )
         if verbose:
-            print(f"Compiled admin.sqlite in {time.time() - t_admin:.1f}s. Uploading to {destination_storage_uri}...")
+            print(f"Compiled admin.sqlite in {time.time() - t_admin:.1f}s.")
 
-        # Upload admin.sqlite to destination if generated
-        if local_admin_db.exists() and local_admin_db.stat().st_size > 0:
-            local_dest = uri_to_local_path(destination_storage_uri)
-            if local_dest is not None:
-                local_dest.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(local_admin_db, local_dest / "admin.sqlite")
-            else:
-                storage_mgr = StorageManager.from_uri(destination_storage_uri)
-                storage_mgr.write_bytes("admin.sqlite", local_admin_db.read_bytes())
+        if verbose:
+            print("\n[Step 1b/3] Compiling High-Resolution admins.parquet (Levels 2,4,6,8) from Overture Maps...")
+        t_parquet = time.time()
+        build_admin_parquet_from_overture(
+            output_path=local_admin_parquet,
+            countries=admin_countries,
+            admin_levels=[2, 4, 6, 8],
+            simplify_tolerance=0.0001,
+            include_maritime=True,
+            verbose=verbose,
+        )
+        if verbose:
+            print(f"Compiled admins.parquet in {time.time() - t_parquet:.1f}s.")
+
+        # Upload both admin databases to destination storage
+        if verbose:
+            print(f"Uploading administrative databases to {destination_storage_uri}...")
+        local_dest = uri_to_local_path(destination_storage_uri)
+        for admin_file in (local_admin_db, local_admin_parquet):
+            if admin_file.exists() and admin_file.stat().st_size > 0:
+                fname = admin_file.name
+                if local_dest is not None:
+                    local_dest.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(admin_file, local_dest / fname)
+                else:
+                    storage_mgr = StorageManager.from_uri(destination_storage_uri)
+                    storage_mgr.write_bytes(fname, admin_file.read_bytes())
 
     # 2. Sequential continental builds
     results_by_continent: dict[str, dict[str, Any]] = {}
