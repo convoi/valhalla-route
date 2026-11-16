@@ -3,6 +3,8 @@ import io
 import pandas as pd
 import pytest
 
+from unittest.mock import patch
+
 from valhallaroute.client import ActorBackend, HttpBackend, ValhallaBackend
 from valhallaroute.enricher import enrich_gps_points, read_gps_csv
 
@@ -76,10 +78,16 @@ def test_enrich_with_mock_backend():
 
     mock_backend = MockBackend(mock_resp)
 
-    res_df = enrich_gps_points(
-        io.StringIO(csv_data),
-        backend=mock_backend,
-    )
+    with patch("valhallaroute.enricher.lookup_coordinates") as mock_geo:
+        mock_geo.return_value = [
+            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
+            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
+            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
+        ]
+        res_df = enrich_gps_points(
+            io.StringIO(csv_data),
+            backend=mock_backend,
+        )
 
     assert len(res_df) == 3
     # Check column existence
@@ -216,7 +224,12 @@ def test_actor_backend_mock_actor():
     actor = DummyActor()
     backend = ActorBackend(actor=actor)
     csv_data = "lat,lon\n52.52,13.40\n52.53,13.41\n"
-    res = enrich_gps_points(io.StringIO(csv_data), backend=backend)
+    with patch("valhallaroute.enricher.lookup_coordinates") as mock_geo:
+        mock_geo.return_value = [
+            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
+            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
+        ]
+        res = enrich_gps_points(io.StringIO(csv_data), backend=backend)
     assert len(res) == 2
     assert res.loc[0, "city"] is not None
 

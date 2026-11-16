@@ -552,6 +552,7 @@ def enrich_gps_points(
     tile_dir: Union[str, Path, None] = None,
     tile_storage_uri: str | None = None,
     tile_cache_dir: Union[str, Path, None] = "valhalla_tiles_cache",
+    admin_db_path: Union[str, Path, None] = None,
     config: Union[dict[str, Any], str, Path, None] = None,
     valhalla_url: str | None = None,
     costing: str = "auto",
@@ -889,15 +890,33 @@ def enrich_gps_points(
                 if verbose:
                     print(f"Warning: Crossing lookup failed: {exc}")
 
-    # Offline reverse geocoding for city & country fallback
+    # Offline reverse geocoding for city & country fallback using admin.sqlite
     if reverse_geocode_cities and coords_for_geocoding:
-        geocoded = lookup_coordinates(coords_for_geocoding)
+        resolved_admin_db = admin_db_path
+        if not resolved_admin_db:
+            search_candidates = []
+            if tile_cache_dir:
+                search_candidates.append(Path(tile_cache_dir))
+            if tile_dir:
+                search_candidates.append(Path(tile_dir))
+            search_candidates.extend([Path("valhalla_tiles"), Path("valhalla_tiles_cache")])
+
+            for cand_dir in search_candidates:
+                for fname in ("admin.sqlite", "admins.sqlite"):
+                    cand_p = cand_dir / fname
+                    if cand_p.exists() and cand_p.stat().st_size > 0:
+                        resolved_admin_db = cand_p
+                        break
+                if resolved_admin_db:
+                    break
+
+        geocoded = lookup_coordinates(coords_for_geocoding, admin_db_path=resolved_admin_db)
         for i, item in enumerate(matched_results):
             geo = geocoded[i] if i < len(geocoded) else {}
             if not item.get("city") or item.get("city") == "None":
                 item["city"] = geo.get("city")
             if not item.get("country") or item.get("country") == "None":
-                item["country"] = geo.get("country_code")
+                item["country"] = geo.get("country_code") or geo.get("country")
 
     # Construct output columns
     enriched_df = df.copy()
