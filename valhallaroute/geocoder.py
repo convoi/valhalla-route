@@ -137,12 +137,20 @@ def point_in_multipolygon(x: float, y: float, polys: list[list[list[tuple[float,
     return False
 
 
+try:
+    import shapely
+    from shapely.geometry import MultiPolygon, Polygon
+    HAS_SHAPELY = True
+except ImportError:
+    HAS_SHAPELY = False
+
+
 class AdminGeocoder:
     """Thread-safe reverse geocoder querying Valhalla/Overture admin.sqlite via SQLite R-Tree."""
 
     def __init__(self, admin_db_path: Path | str | None = None) -> None:
         self.db_path = self._resolve_db_path(admin_db_path)
-        self._geom_cache: dict[int, list[list[list[tuple[float, float]]]]] = {}
+        self._geom_cache: dict[int, Any] = {}
         self._cache_lock = threading.Lock()
         self._local = threading.local()
 
@@ -259,14 +267,35 @@ class AdminGeocoder:
                 if not geom_blob:
                     continue
 
-                # Retrieve or parse geometry rings
-                rings = self._geom_cache.get(rowid)
-                if rings is None:
+                # Retrieve or parse geometry
+                geom_obj = self._geom_cache.get(rowid)
+                if geom_obj is None:
                     rings = parse_spatialite_rings(geom_blob)
-                    with self._cache_lock:
-                        self._geom_cache[rowid] = rings
+                    if HAS_SHAPELY:
+                        polys = []
+                        for r_list in rings:
+                            if r_list:
+                                ext = r_list[0]
+                                holes = r_list[1:] if len(r_list) > 1 else None
+                                polys.append(Polygon(ext, holes))
+                        geom_obj = MultiPolygon(polys) if polys else None
+                        if geom_obj:
+                            shapely.prepare(geom_obj)
+                    else:
+                        geom_obj = rings
 
-                if point_in_multipolygon(lon, lat, rings):
+                    with self._cache_lock:
+                        self._geom_cache[rowid] = geom_obj
+
+                if geom_obj is None:
+                    continue
+
+                if HAS_SHAPELY:
+                    is_inside = shapely.contains_xy(geom_obj, lon, lat)
+                else:
+                    is_inside = point_in_multipolygon(lon, lat, geom_obj)
+
+                if is_inside:
                     # Admin levels: 8=city/locality, 6=county, 4=state/region, 2=country
                     if admin_level in (7, 8, 9, 10) and not res["city"]:
                         res["city"] = name
@@ -279,6 +308,9 @@ class AdminGeocoder:
                             res["country_code"] = iso_code
                         if not res["country"]:
                             res["country"] = name
+
+                    if res["city"] and res["admin1"] and res["country_code"]:
+                        break
 
             unique_results.append(res)
 

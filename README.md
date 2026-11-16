@@ -31,7 +31,7 @@ Below is an excerpt of real rows from our benchmark trip dataset (`hannover_tabl
 
 | road_name | road_type | dist_to_intersection | intersection_edges | stop_sign | yield_sign | traffic_signal | is_crossing (type) | curvature | turn_direction | city |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- | :---: | :--- | :--- |
-| **Alt-Vinnhorst** | tertiary | `0.0 m` | 3-way | **True** | False | False | False | 3 | straight | Langenhagen |
+| **Alt-Vinnhorst** | tertiary | `0.0 m` | 3-way | **True** | False | False | False | 3 | straight | Hannover |
 | **Godshorner Str.** | secondary | `5.7 m` | 3-way | False | **True** | False | **True** (`unmarked`) | 0 | straight | Langenhagen |
 | **Bothfelder Str.** | secondary | `9.0 m` | 4-way | False | False | **True** | **True** (`traffic_signals`) | 0 | straight | Langenhagen |
 | **Engelbosteler Damm** | residential | `5.0 m` | 4-way | False | **True** | **True** | **True** (`traffic_signals`) | 15 (sharp) | slight_right | Hannover |

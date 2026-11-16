@@ -218,6 +218,7 @@ def build_admin_sqlite_from_overture(
     output_path: Union[str, Path],
     countries: Optional[Sequence[str]] = None,
     admin_levels: Optional[Sequence[int]] = None,
+    bbox: Optional[tuple[float, float, float, float]] = None,
     release: str = "2026-10-21.0",
     s3_region: str = "us-west-2",
     include_maritime: bool = True,
@@ -280,6 +281,12 @@ def build_admin_sqlite_from_overture(
         countries_cleaned = [c.upper().strip() for c in countries]
         countries_sql = ", ".join(f"'{c}'" for c in countries_cleaned)
         where_clauses.append(f"country IN ({countries_sql})")
+
+    if bbox:
+        b_minx, b_miny, b_maxx, b_maxy = bbox
+        where_clauses.append(
+            f"bbox.xmin <= {b_maxx} AND bbox.xmax >= {b_minx} AND bbox.ymin <= {b_maxy} AND bbox.ymax >= {b_miny}"
+        )
 
     where_stmt = " AND ".join(where_clauses)
 
