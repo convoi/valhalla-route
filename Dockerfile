@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for ValhallaRoute distributed Kubernetes batch jobs
+# Multi-stage Dockerfile for ValhallaRoute
 # Stage 1: Build virtual environment with uv
 FROM python:3.12-slim-bookworm AS builder
 

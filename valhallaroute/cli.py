@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 from .admin_builder import build_admin_sqlite_from_overture
-from .batch import plan_batch, run_worker
 from .enricher import enrich_gps_points
 from .storage import StorageManager, uri_to_local_path
 
@@ -120,126 +119,6 @@ def build_enrich_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_plan_batch_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="valhallaroute plan-batch",
-        description="Plan distributed Kubernetes batch tile generation by generating a balanced JSONL task manifest for regions.",
-    )
-    parser.add_argument(
-        "--regions",
-        nargs="+",
-        dest="regions",
-        help="List of Geofabrik region names, slugs, or wildcards (e.g. 'bayern', 'berlin', 'germany/*').",
-    )
-    parser.add_argument(
-        "--regions-file",
-        dest="regions_file",
-        help="Path or URI to text file containing region names (one per line, # comments allowed).",
-    )
-    parser.add_argument(
-        "-m", "--manifest",
-        dest="output_manifest_uri",
-        required=True,
-        help="Destination URI or path for the generated task manifest (JSONL).",
-    )
-    parser.add_argument(
-        "-o", "--output", "--tile-storage-uri",
-        dest="tile_storage_uri",
-        default="s3://valhalla-tiles/global/",
-        help="Destination blob URI prefix or local directory where generated .gph tiles will be uploaded (default: s3://valhalla-tiles/global/).",
-    )
-    parser.add_argument(
-        "--auto-subdivide",
-        dest="auto_subdivide",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Automatically subdivide mega-regions exceeding max-tiles into child regions (default: True).",
-    )
-    parser.add_argument(
-        "--max-tiles",
-        dest="max_tiles_per_job",
-        type=int,
-        default=300,
-        help="Maximum estimated tiles per region before auto-subdividing (default: 300).",
-    )
-    parser.add_argument(
-        "--bin-pack",
-        dest="bin_pack",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Bin-pack small regions (< min-tiles) into balanced worker tasks (default: True).",
-    )
-    parser.add_argument(
-        "--target-tiles",
-        dest="target_tiles_per_job",
-        type=int,
-        default=200,
-        help="Target tile count per worker task during bin-packing (default: 200).",
-    )
-    parser.add_argument(
-        "--min-tiles",
-        dest="min_tiles_per_job",
-        type=int,
-        default=50,
-        help="Minimum tile threshold before small regions are bin-packed (default: 50).",
-    )
-    parser.add_argument(
-        "--admin-boundaries",
-        dest="build_admins",
-        action="store_true",
-        help="Compile admin.sqlite from Overture Maps and upload to tile storage root.",
-    )
-    parser.add_argument(
-        "--admin-countries",
-        dest="admin_countries",
-        nargs="+",
-        help="Explicit country ISO codes for admin.sqlite (defaults to auto-detected from regions).",
-    )
-    return parser
-
-
-def build_run_worker_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="valhallaroute run-worker",
-        description="Execute a single indexed worker task from the batch manifest to build and upload tiles.",
-    )
-    parser.add_argument(
-        "-m", "--manifest",
-        dest="manifest_uri",
-        required=True,
-        help="URI or path to task manifest (JSONL).",
-    )
-    parser.add_argument(
-        "--task-index",
-        dest="task_index",
-        type=int,
-        default=None,
-        help="Task completion index (defaults to $JOB_COMPLETION_INDEX environment variable).",
-    )
-    parser.add_argument(
-        "-o", "--output", "--tile-storage-uri",
-        dest="tile_storage_uri",
-        help="Override destination blob storage prefix or local directory for generated .gph tiles.",
-    )
-    parser.add_argument(
-        "--admin-db-uri",
-        dest="admin_db_uri",
-        help="Override URI or path to admin.sqlite database.",
-    )
-    parser.add_argument(
-        "--temp-dir",
-        dest="temp_dir",
-        help="Custom local temporary directory for downloading PBF and building tiles.",
-    )
-    parser.add_argument(
-        "--keep-temp",
-        dest="keep_temp",
-        action="store_true",
-        help="Do not delete temporary download and build files upon completion.",
-    )
-    return parser
-
-
 def build_build_admin_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="valhallaroute build-admin",
@@ -331,46 +210,6 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
 
     # Check for subcommands
-    if argv and argv[0] == "plan-batch":
-        parser = build_plan_batch_parser()
-        args = parser.parse_args(argv[1:])
-        try:
-            tasks = plan_batch(
-                regions=args.regions,
-                regions_file=args.regions_file,
-                output_manifest_uri=args.output_manifest_uri,
-                tile_storage_uri=args.tile_storage_uri,
-                auto_subdivide=args.auto_subdivide,
-                max_tiles_per_job=args.max_tiles_per_job,
-                bin_pack=args.bin_pack,
-                target_tiles_per_job=args.target_tiles_per_job,
-                min_tiles_per_job=args.min_tiles_per_job,
-                build_admins=args.build_admins,
-                admin_countries=args.admin_countries,
-            )
-            print(f"Successfully generated {len(tasks)} tasks in manifest: {args.output_manifest_uri}")
-            return 0
-        except Exception as e:
-            print(f"Error planning batch: {e}", file=sys.stderr)
-            return 1
-
-    if argv and argv[0] == "run-worker":
-        parser = build_run_worker_parser()
-        args = parser.parse_args(argv[1:])
-        try:
-            run_worker(
-                manifest_uri=args.manifest_uri,
-                task_index=args.task_index,
-                tile_storage_uri=args.tile_storage_uri,
-                admin_db_uri=args.admin_db_uri,
-                temp_dir=args.temp_dir,
-                keep_temp=args.keep_temp,
-            )
-            return 0
-        except Exception as e:
-            print(f"Worker error: {e}", file=sys.stderr)
-            return 2
-
     if argv and argv[0] == "build-admin":
         parser = build_build_admin_parser()
         args = parser.parse_args(argv[1:])

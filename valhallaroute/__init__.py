@@ -1,7 +1,6 @@
 """ValhallaRoute: GPS trip route enrichment using Valhalla."""
 __version__ = "0.4.0"
 
-from .batch import plan_batch, run_worker
 from .client import ActorBackend, HttpBackend, ValhallaBackend, resolve_backend
 from .crossings import CrossingIndexer
 from .enricher import enrich_gps_points, read_gps_csv
@@ -46,8 +45,6 @@ __all__ = [
     "get_tiles_for_bbox",
     "get_valhalla_tile_id",
     "get_valhalla_tile_relative_path",
-    "plan_batch",
-    "run_worker",
     "build_admin_sqlite_from_overture",
     "wkb_to_spatialite_blob",
 ]
