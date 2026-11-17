@@ -196,6 +196,11 @@ def test_empty_dataframe():
     assert "road_type" in res.columns
     assert "surface" in res.columns
     assert "road_density" in res.columns
+    assert "speed_limit" in res.columns
+    assert "free_flow_speed" in res.columns
+    assert "sidewalk" in res.columns
+    assert "cycle_lane" in res.columns
+    assert "oneway" in res.columns
 
 
 def test_single_point_graceful():
@@ -634,6 +639,66 @@ def test_surface_and_road_density_enrichment():
     assert res.loc[3, "valhalla_type"] == "unmatched"
     assert pd.isna(res.loc[3, "surface"]) or res.loc[3, "surface"] is None
     assert pd.isna(res.loc[3, "road_density"]) or res.loc[3, "road_density"] is None
+
+
+def test_av_features_enrichment():
+    mock_resp = {
+        "admins": [{"country_text": "Germany"}],
+        "edges": [
+            {
+                "names": ["Hauptstraße"],
+                "road_class": "primary",
+                "speed_limit": 50,
+                "speed": 45,
+                "sidewalk": "both",
+                "cycle_lane": "dedicated",
+                "traversability": "forward",  # oneway = True
+            },
+            {
+                "names": ["Zweiwegstraße"],
+                "road_class": "secondary",
+                "speed_limit": 100,
+                "free_flow_speed": 85,  # test free_flow_speed key alternative
+                "sidewalk": "none",
+                "cycle_lane": "shared",
+                "traversability": "both",  # oneway = False
+            },
+        ],
+        "matched_points": [
+            {"type": "matched", "edge_index": 0},
+            {"type": "interpolated", "edge_index": 1},
+            {"type": "unmatched"},
+        ],
+    }
+    csv_data = "lat,lon\n52.50,13.30\n52.51,13.31\n52.52,13.32\n"
+    res = enrich_gps_points(io.StringIO(csv_data), backend=MockBackend(mock_resp))
+
+    assert len(res) == 3
+
+    # Point 0: Matched oneway with sidewalk both, dedicated cycle lane, 50 km/h speed limit
+    assert res.loc[0, "valhalla_type"] == "matched"
+    assert res.loc[0, "speed_limit"] == 50.0
+    assert res.loc[0, "free_flow_speed"] == 45.0
+    assert res.loc[0, "sidewalk"] == "both"
+    assert res.loc[0, "cycle_lane"] == "dedicated"
+    assert bool(res.loc[0, "oneway"]) is True
+
+    # Point 1: Interpolated two-way with no sidewalk, shared cycle lane, 100 km/h speed limit
+    assert res.loc[1, "valhalla_type"] == "interpolated"
+    assert res.loc[1, "speed_limit"] == 100.0
+    assert res.loc[1, "free_flow_speed"] == 85.0
+    assert res.loc[1, "sidewalk"] == "none"
+    assert res.loc[1, "cycle_lane"] == "shared"
+    assert bool(res.loc[1, "oneway"]) is False
+
+    # Point 2: Unmatched
+    assert res.loc[2, "valhalla_type"] == "unmatched"
+    assert pd.isna(res.loc[2, "speed_limit"])
+    assert pd.isna(res.loc[2, "free_flow_speed"])
+    assert pd.isna(res.loc[2, "sidewalk"]) or res.loc[2, "sidewalk"] is None
+    assert pd.isna(res.loc[2, "cycle_lane"]) or res.loc[2, "cycle_lane"] is None
+    assert bool(res.loc[2, "oneway"]) is False
+
 
 
 

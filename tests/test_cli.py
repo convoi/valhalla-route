@@ -43,6 +43,11 @@ def test_cli_execution(tmp_path: Path):
     assert "road_type" in df.columns
     assert "surface" in df.columns
     assert "road_density" in df.columns
+    assert "speed_limit" in df.columns
+    assert "free_flow_speed" in df.columns
+    assert "sidewalk" in df.columns
+    assert "cycle_lane" in df.columns
+    assert "oneway" in df.columns
     assert "distance_to_next_intersection" in df.columns
     assert "intersection_edge_count" in df.columns
     assert "has_stop_sign" in df.columns

@@ -8,6 +8,11 @@ The resulting pandas DataFrame includes all original columns plus the enriched a
 * **`road_type`** (`str`): Road classification (`motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `residential`, `service_other`, etc.).
 * **`surface`** (`str` | `None`): Road surface composition (`paved_smooth`, `paved`, `paved_rough`, `compacted`, `dirt`, `gravel`, `path`, etc.).
 * **`road_density`** (`int` | `None`): Relative street network density around the road segment (0–15).
+* **`speed_limit`** (`float` | `None`): Posted legal speed limit in km/h.
+* **`free_flow_speed`** (`float` | `None`): Routing baseline speed in km/h modeled for the road segment.
+* **`oneway`** (`bool`): Whether the road is a one-way street.
+* **`sidewalk`** (`str` | `None`): Pedestrian walkway infrastructure (`none`, `left`, `right`, `both`).
+* **`cycle_lane`** (`str` | `None`): Bicycle infrastructure (`none`, `shared`, `dedicated`, `separated`).
 * **`distance_to_next_intersection`** (`float` | `None`): Distance in meters along the road segment to the upcoming intersection node.
 * **`intersection_edge_count`** (`int` | `None`): Number of road legs meeting at the upcoming intersection (e.g. 3 for T-junction, 4 for crossroad).
 * **`has_stop_sign`** (`bool`): Whether the point is approaching or stopped at a stop sign.

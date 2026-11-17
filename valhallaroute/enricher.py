@@ -240,6 +240,11 @@ def _process_trace_attributes_response(
         road_type = None
         surface = None
         road_density = None
+        speed_limit = None
+        free_flow_speed = None
+        sidewalk = None
+        cycle_lane = None
+        oneway = False
         country = None
         county = None
         city = None
@@ -256,6 +261,32 @@ def _process_trace_attributes_response(
                 road_density = int(edge["density"])
             elif edge.get("road_density") is not None:
                 road_density = int(edge["road_density"])
+
+            # Speed limit and free-flow speed
+            if edge.get("speed_limit") is not None:
+                try:
+                    speed_limit = round(float(edge["speed_limit"]), 1)
+                except (ValueError, TypeError):
+                    speed_limit = None
+
+            speed_val = edge.get("speed") if edge.get("speed") is not None else edge.get("free_flow_speed")
+            if speed_val is not None:
+                try:
+                    free_flow_speed = round(float(speed_val), 1)
+                except (ValueError, TypeError):
+                    free_flow_speed = None
+
+            # Sidewalk and cycle lane
+            if edge.get("sidewalk") is not None:
+                sidewalk = str(edge["sidewalk"])
+            if edge.get("cycle_lane") is not None:
+                cycle_lane = str(edge["cycle_lane"])
+
+            # Oneway
+            if edge.get("oneway") is not None:
+                oneway = bool(edge["oneway"])
+            elif edge.get("traversability") is not None:
+                oneway = bool(edge["traversability"] in ("forward", "backward"))
 
             # Curvature
             if edge.get("curvature") is not None:
@@ -435,6 +466,11 @@ def _process_trace_attributes_response(
             "road_type": road_type,
             "surface": surface,
             "road_density": road_density,
+            "speed_limit": speed_limit,
+            "free_flow_speed": free_flow_speed,
+            "sidewalk": sidewalk,
+            "cycle_lane": cycle_lane,
+            "oneway": oneway,
         })
 
     return results
@@ -512,6 +548,11 @@ def _execute_single_trace(
                 "road_type": None,
                 "surface": None,
                 "road_density": None,
+                "speed_limit": None,
+                "free_flow_speed": None,
+                "sidewalk": None,
+                "cycle_lane": None,
+                "oneway": False,
             }
             for _ in range(len(shape))
         ]
@@ -655,6 +696,11 @@ def enrich_gps_points(
         - road_type (str or None)
         - surface (str or None)
         - road_density (int or None)
+        - speed_limit (float or None)
+        - free_flow_speed (float or None)
+        - sidewalk (str or None)
+        - cycle_lane (str or None)
+        - oneway (bool)
         - valhalla_lat, valhalla_lon (float or None, if preserve_coords=True)
 
     Args:
@@ -737,6 +783,11 @@ def enrich_gps_points(
         res_df["road_type"] = pd.Series(dtype=str)
         res_df["surface"] = pd.Series(dtype=str)
         res_df["road_density"] = pd.Series(dtype="Int64")
+        res_df["speed_limit"] = pd.Series(dtype=float)
+        res_df["free_flow_speed"] = pd.Series(dtype=float)
+        res_df["sidewalk"] = pd.Series(dtype=str)
+        res_df["cycle_lane"] = pd.Series(dtype=str)
+        res_df["oneway"] = pd.Series(dtype=bool)
         return res_df
 
     # Extract coordinates for geocoding and tile region detection
@@ -827,6 +878,11 @@ def enrich_gps_points(
         "road_type": None,
         "surface": None,
         "road_density": None,
+        "speed_limit": None,
+        "free_flow_speed": None,
+        "sidewalk": None,
+        "cycle_lane": None,
+        "oneway": False,
     }
 
     matched_results: list[dict[str, Any]] = [default_attr.copy() for _ in range(len(df))]
@@ -1039,5 +1095,10 @@ def enrich_gps_points(
     enriched_df["road_type"] = [r["road_type"] for r in matched_results]
     enriched_df["surface"] = [r.get("surface") for r in matched_results]
     enriched_df["road_density"] = [r.get("road_density") for r in matched_results]
+    enriched_df["speed_limit"] = [r.get("speed_limit") for r in matched_results]
+    enriched_df["free_flow_speed"] = [r.get("free_flow_speed") for r in matched_results]
+    enriched_df["sidewalk"] = [r.get("sidewalk") for r in matched_results]
+    enriched_df["cycle_lane"] = [r.get("cycle_lane") for r in matched_results]
+    enriched_df["oneway"] = [r.get("oneway", False) for r in matched_results]
 
     return enriched_df
