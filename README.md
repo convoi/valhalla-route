@@ -6,6 +6,8 @@ The resulting pandas DataFrame includes all original columns plus the enriched a
 * **`valhalla_type`** (`str`): Match status (`matched`, `interpolated`, or `unmatched`).
 * **`road_name`** (`str`): Name of the road (e.g. `Alt-Vinnhorst`, `Bothfelder Straße`, `A 2`).
 * **`road_type`** (`str`): Road classification (`motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `residential`, `service_other`, etc.).
+* **`surface`** (`str` | `None`): Road surface composition (`paved_smooth`, `paved`, `paved_rough`, `compacted`, `dirt`, `gravel`, `path`, etc.).
+* **`road_density`** (`int` | `None`): Relative street network density around the road segment (0–15).
 * **`distance_to_next_intersection`** (`float` | `None`): Distance in meters along the road segment to the upcoming intersection node.
 * **`intersection_edge_count`** (`int` | `None`): Number of road legs meeting at the upcoming intersection (e.g. 3 for T-junction, 4 for crossroad).
 * **`has_stop_sign`** (`bool`): Whether the point is approaching or stopped at a stop sign.
@@ -23,6 +25,7 @@ The resulting pandas DataFrame includes all original columns plus the enriched a
 * **`is_tunnel`** (`bool`): Whether the point is located inside a tunnel.
 * **`is_bridge`** (`bool`): Whether the point is located on a bridge.
 * **`city`** (`str`): Resolved city / municipality name.
+* **`county`** (`str`): Resolved county / administrative district name.
 * **`country`** (`str`): Country name (e.g., from Valhalla administrative bounds or ISO code).
 
 ### Enriched Result Excerpt

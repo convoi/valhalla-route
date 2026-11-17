@@ -59,6 +59,8 @@ def test_enrich_with_mock_backend():
                 "bridge": False,
                 "country_crossing": False,
                 "admin_index": 0,
+                "surface": "paved_smooth",
+                "density": 10,
             },
             {
                 "names": ["Bridgestreet"],
@@ -67,6 +69,8 @@ def test_enrich_with_mock_backend():
                 "bridge": True,
                 "country_crossing": True,
                 "admin_index": 0,
+                "surface": "paved",
+                "density": 4,
             },
         ],
         "matched_points": [
@@ -117,6 +121,8 @@ def test_enrich_with_mock_backend():
     assert "country" in res_df.columns
     assert "road_name" in res_df.columns
     assert "road_type" in res_df.columns
+    assert "surface" in res_df.columns
+    assert "road_density" in res_df.columns
     assert "road name" not in res_df.columns
     assert "road type" not in res_df.columns
 
@@ -129,6 +135,8 @@ def test_enrich_with_mock_backend():
     assert bool(res_df.loc[0, "is_crossing"]) is False
     assert res_df.loc[0, "road_name"] == "Tunnelway"
     assert res_df.loc[0, "road_type"] == "motorway"
+    assert res_df.loc[0, "surface"] == "paved_smooth"
+    assert res_df.loc[0, "road_density"] == 10
     assert res_df.loc[0, "country"] == "Germany"
 
     # Point 1: Bridge & border crossing
@@ -141,6 +149,8 @@ def test_enrich_with_mock_backend():
     assert res_df.loc[1, "crossing_type"] == "border_crossing"
     assert res_df.loc[1, "road_name"] == "Bridgestreet"
     assert res_df.loc[1, "road_type"] == "primary"
+    assert res_df.loc[1, "surface"] == "paved"
+    assert res_df.loc[1, "road_density"] == 4
 
     # Point 2: Unmatched
     assert res_df.loc[2, "valhalla_type"] == "unmatched"
@@ -151,6 +161,8 @@ def test_enrich_with_mock_backend():
     assert bool(res_df.loc[2, "is_crossing"]) is False
     assert pd.isna(res_df.loc[2, "road_name"]) or res_df.loc[2, "road_name"] is None
     assert pd.isna(res_df.loc[2, "road_type"]) or res_df.loc[2, "road_type"] is None
+    assert pd.isna(res_df.loc[2, "surface"]) or res_df.loc[2, "surface"] is None
+    assert pd.isna(res_df.loc[2, "road_density"]) or res_df.loc[2, "road_density"] is None
     # Offline geocoding should still populate city, county & country for Berlin coords
     assert res_df.loc[2, "city"] is not None
     assert res_df.loc[2, "county"] is not None
@@ -182,6 +194,8 @@ def test_empty_dataframe():
     assert "country" in res.columns
     assert "road_name" in res.columns
     assert "road_type" in res.columns
+    assert "surface" in res.columns
+    assert "road_density" in res.columns
 
 
 def test_single_point_graceful():
@@ -565,6 +579,62 @@ def test_preserve_coords_option():
     assert "valhalla_lat" in res_alias.columns
     assert pytest.approx(res_alias.loc[0, "lat"]) == 52.520100
     assert pytest.approx(res_alias.loc[0, "valhalla_lat"]) == 52.520005
+
+
+def test_surface_and_road_density_enrichment():
+    mock_resp = {
+        "admins": [{"country_text": "Germany"}],
+        "edges": [
+            {
+                "names": ["Autobahn"],
+                "road_class": "motorway",
+                "surface": "paved_smooth",
+                "density": 12,
+            },
+            {
+                "names": ["Forest Road"],
+                "road_class": "track",
+                "surface": "compacted",
+                "road_density": 2,  # test road_density key alternative
+            },
+            {
+                "names": ["Cobblestone Alley"],
+                "road_class": "residential",
+                "surface": "paved_rough",
+                # density omitted
+            },
+        ],
+        "matched_points": [
+            {"type": "matched", "edge_index": 0},
+            {"type": "interpolated", "edge_index": 1},
+            {"type": "matched", "edge_index": 2},
+            {"type": "unmatched"},
+        ],
+    }
+    csv_data = "lat,lon\n52.50,13.30\n52.51,13.31\n52.52,13.32\n52.53,13.33\n"
+    res = enrich_gps_points(io.StringIO(csv_data), backend=MockBackend(mock_resp))
+
+    assert len(res) == 4
+    # Matched point 0
+    assert res.loc[0, "valhalla_type"] == "matched"
+    assert res.loc[0, "surface"] == "paved_smooth"
+    assert res.loc[0, "road_density"] == 12
+
+    # Interpolated point 1
+    assert res.loc[1, "valhalla_type"] == "interpolated"
+    assert res.loc[1, "surface"] == "compacted"
+    assert res.loc[1, "road_density"] == 2
+
+    # Matched point 2 (no density in edge)
+    assert res.loc[2, "valhalla_type"] == "matched"
+    assert res.loc[2, "surface"] == "paved_rough"
+    assert pd.isna(res.loc[2, "road_density"]) or res.loc[2, "road_density"] is None
+
+    # Unmatched point 3
+    assert res.loc[3, "valhalla_type"] == "unmatched"
+    assert pd.isna(res.loc[3, "surface"]) or res.loc[3, "surface"] is None
+    assert pd.isna(res.loc[3, "road_density"]) or res.loc[3, "road_density"] is None
+
 
 
 

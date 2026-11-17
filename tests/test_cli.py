@@ -14,7 +14,7 @@ def test_cli_execution(tmp_path: Path):
 
     mock_resp = {
         "admins": [{"country_text": "Germany"}],
-        "edges": [{"names": ["Sample Road"], "road_class": "secondary", "admin_index": 0}],
+        "edges": [{"names": ["Sample Road"], "road_class": "secondary", "admin_index": 0, "surface": "asphalt", "density": 8}],
         "matched_points": [{"type": "matched", "edge_index": 0}, {"type": "matched", "edge_index": 0}],
     }
 
@@ -41,12 +41,16 @@ def test_cli_execution(tmp_path: Path):
     assert "country" in df.columns
     assert "road_name" in df.columns
     assert "road_type" in df.columns
+    assert "surface" in df.columns
+    assert "road_density" in df.columns
     assert "distance_to_next_intersection" in df.columns
     assert "intersection_edge_count" in df.columns
     assert "has_stop_sign" in df.columns
     assert "has_yield_sign" in df.columns
     assert "curvature" in df.columns
     assert df.loc[0, "road_name"] == "Sample Road"
+    assert df.loc[0, "surface"] == "asphalt"
+    assert df.loc[0, "road_density"] == 8
     assert df.loc[0, "valhalla_type"] == "matched"
 
 

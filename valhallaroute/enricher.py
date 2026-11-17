@@ -238,6 +238,8 @@ def _process_trace_attributes_response(
         roundabout_action = None
         road_name = None
         road_type = None
+        surface = None
+        road_density = None
         country = None
         county = None
         city = None
@@ -246,6 +248,14 @@ def _process_trace_attributes_response(
             edge = edges[edge_index]
             is_tunnel = bool(edge.get("tunnel", False))
             is_bridge = bool(edge.get("bridge", False))
+
+            # Surface and road density
+            if edge.get("surface") is not None:
+                surface = str(edge["surface"])
+            if edge.get("density") is not None:
+                road_density = int(edge["density"])
+            elif edge.get("road_density") is not None:
+                road_density = int(edge["road_density"])
 
             # Curvature
             if edge.get("curvature") is not None:
@@ -423,6 +433,8 @@ def _process_trace_attributes_response(
             "country": country,
             "road_name": road_name,
             "road_type": road_type,
+            "surface": surface,
+            "road_density": road_density,
         })
 
     return results
@@ -498,6 +510,8 @@ def _execute_single_trace(
                 "country": None,
                 "road_name": None,
                 "road_type": None,
+                "surface": None,
+                "road_density": None,
             }
             for _ in range(len(shape))
         ]
@@ -639,6 +653,8 @@ def enrich_gps_points(
         - country (str or None)
         - road_name (str or None)
         - road_type (str or None)
+        - surface (str or None)
+        - road_density (int or None)
         - valhalla_lat, valhalla_lon (float or None, if preserve_coords=True)
 
     Args:
@@ -719,6 +735,8 @@ def enrich_gps_points(
         res_df["country"] = pd.Series(dtype=str)
         res_df["road_name"] = pd.Series(dtype=str)
         res_df["road_type"] = pd.Series(dtype=str)
+        res_df["surface"] = pd.Series(dtype=str)
+        res_df["road_density"] = pd.Series(dtype="Int64")
         return res_df
 
     # Extract coordinates for geocoding and tile region detection
@@ -807,6 +825,8 @@ def enrich_gps_points(
         "country": None,
         "road_name": None,
         "road_type": None,
+        "surface": None,
+        "road_density": None,
     }
 
     matched_results: list[dict[str, Any]] = [default_attr.copy() for _ in range(len(df))]
@@ -1017,5 +1037,7 @@ def enrich_gps_points(
     enriched_df["country"] = [r["country"] for r in matched_results]
     enriched_df["road_name"] = [r["road_name"] for r in matched_results]
     enriched_df["road_type"] = [r["road_type"] for r in matched_results]
+    enriched_df["surface"] = [r.get("surface") for r in matched_results]
+    enriched_df["road_density"] = [r.get("road_density") for r in matched_results]
 
     return enriched_df
