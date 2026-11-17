@@ -54,19 +54,36 @@ def build_enrich_parser() -> argparse.ArgumentParser:
         help="Valhalla costing model (default: auto).",
     )
     parser.add_argument(
-        "--lat-col",
+        "--lat-col", "--lat",
         dest="lat_col",
         help="Explicit latitude column name in input.",
     )
     parser.add_argument(
-        "--lon-col",
+        "--lon-col", "--lon",
         dest="lon_col",
         help="Explicit longitude column name in input.",
     )
     parser.add_argument(
-        "--trip-col",
+        "--time-col", "--time",
+        dest="time_col",
+        help="Explicit timestamp/time column name in input.",
+    )
+    parser.add_argument(
+        "--trip-col", "--trip",
         dest="trip_col",
         help="Explicit trip ID column name in input (for grouping).",
+    )
+    parser.add_argument(
+        "--admin-db", "--admin-db-path",
+        dest="admin_db_path",
+        help="Explicit path or URI to admin database (.sqlite or .parquet) for offline reverse geocoding.",
+    )
+    parser.add_argument(
+        "--preserve-coords", "--valhalla-coords", "--preserve-original-coords",
+        dest="preserve_coords",
+        action="store_true",
+        default=False,
+        help="Preserve original input lat/lon coordinates and output produced (matched/interpolated) coordinates as valhalla_lat and valhalla_lon.",
     )
     parser.add_argument(
         "--utm-crs",
@@ -289,16 +306,19 @@ def main(argv: list[str] | None = None) -> int:
             tile_dir=args.tile_dir,
             tile_storage_uri=args.tile_storage_uri,
             tile_cache_dir=args.tile_cache_dir,
+            admin_db_path=args.admin_db_path,
             valhalla_url=args.valhalla_url,
             costing=args.costing,
             lat_col=args.lat_col,
             lon_col=args.lon_col,
+            time_col=args.time_col,
             trip_col=args.trip_col,
             utm_crs=args.utm_crs,
             crossing_buffer_meters=args.crossing_buffer,
             intersection_buffer_meters=args.intersection_buffer,
             roundabout_buffer_meters=args.roundabout_buffer,
             interpolation_distance=args.interpolation_distance,
+            preserve_coords=args.preserve_coords,
             auto_build_tiles=not args.no_auto_tiles,
             osm_pbf=args.osm_pbf,
             osm_url=args.osm_url,

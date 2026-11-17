@@ -523,5 +523,50 @@ def test_interpolation_distance_default_and_custom():
     assert backend_custom.calls[0]["trace_options"]["interpolation_distance"] == 15.0
 
 
+def test_preserve_coords_option():
+    mock_resp = {
+        "admins": [{"country_text": "Germany"}],
+        "edges": [{"names": ["Main St"], "road_class": "primary"}],
+        "matched_points": [
+            {"type": "matched", "edge_index": 0, "lat": 52.520005, "lon": 13.400005},
+            {"type": "unmatched"},
+        ],
+    }
+    csv_data = "lat,lon\n52.520100,13.400100\n52.530000,13.410000\n"
+
+    # 1. Default (preserve_coords=False): original lat/lon overwritten for matched points
+    res_default = enrich_gps_points(io.StringIO(csv_data), backend=MockBackend(mock_resp), preserve_coords=False)
+    assert "valhalla_lat" not in res_default.columns
+    assert "valhalla_lon" not in res_default.columns
+    # Row 0 matched -> coordinates updated
+    assert pytest.approx(res_default.loc[0, "lat"]) == 52.520005
+    assert pytest.approx(res_default.loc[0, "lon"]) == 13.400005
+    # Row 1 unmatched -> original coordinates preserved
+    assert pytest.approx(res_default.loc[1, "lat"]) == 52.530000
+    assert pytest.approx(res_default.loc[1, "lon"]) == 13.410000
+
+    # 2. preserve_coords=True: original coordinates untouched, valhalla_lat/lon added
+    res_preserved = enrich_gps_points(io.StringIO(csv_data), backend=MockBackend(mock_resp), preserve_coords=True)
+    assert "valhalla_lat" in res_preserved.columns
+    assert "valhalla_lon" in res_preserved.columns
+    # Original coordinates intact
+    assert pytest.approx(res_preserved.loc[0, "lat"]) == 52.520100
+    assert pytest.approx(res_preserved.loc[0, "lon"]) == 13.400100
+    assert pytest.approx(res_preserved.loc[1, "lat"]) == 52.530000
+    assert pytest.approx(res_preserved.loc[1, "lon"]) == 13.410000
+    # Valhalla coordinates
+    assert pytest.approx(res_preserved.loc[0, "valhalla_lat"]) == 52.520005
+    assert pytest.approx(res_preserved.loc[0, "valhalla_lon"]) == 13.400005
+    assert pd.isna(res_preserved.loc[1, "valhalla_lat"])
+    assert pd.isna(res_preserved.loc[1, "valhalla_lon"])
+
+    # 3. valhalla_coords=True alias
+    res_alias = enrich_gps_points(io.StringIO(csv_data), backend=MockBackend(mock_resp), valhalla_coords=True)
+    assert "valhalla_lat" in res_alias.columns
+    assert pytest.approx(res_alias.loc[0, "lat"]) == 52.520100
+    assert pytest.approx(res_alias.loc[0, "valhalla_lat"]) == 52.520005
+
+
+
 
 

@@ -199,6 +199,19 @@ df = enrich_gps_points("trip.csv", admin_db_path="admin.sqlite")
 # Enrich using local tiles (auto-downloads OSM and builds tiles if missing)
 valhallaroute input_trip.csv -o enriched_trip.csv
 
+# Custom column mapping for arbitrary CSV files
+valhallaroute input_trip.csv -o enriched_trip.csv \
+  --trip trip_id \
+  --time recorded_at \
+  --lat latitude \
+  --lon longitude
+
+# Preserve original GPS coordinates and store matched coordinates in valhalla_lat / valhalla_lon
+valhallaroute input_trip.csv -o enriched_trip.csv --preserve-coords
+
+# Specify custom administrative database path for reverse geocoding
+valhallaroute input_trip.csv -o enriched_trip.csv --admin-db /path/to/admin.parquet
+
 # Specify region to auto-download if tiles are missing
 valhallaroute input_trip.csv -o enriched_trip.csv --region monaco
 

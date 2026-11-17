@@ -212,6 +212,8 @@ def _process_trace_attributes_response(
     for i in range(num_points):
         pt = matched_points[i] if i < len(matched_points) else {}
         pt_type = pt.get("type", "unmatched")
+        valhalla_lat = pt.get("lat") if pt_type in ("matched", "interpolated") else None
+        valhalla_lon = pt.get("lon") if pt_type in ("matched", "interpolated") else None
         edge_index = pt.get("edge_index")
 
         is_on_ramp = False
@@ -394,6 +396,8 @@ def _process_trace_attributes_response(
 
         results.append({
             "valhalla_type": pt_type,
+            "valhalla_lat": valhalla_lat,
+            "valhalla_lon": valhalla_lon,
             "is_on_ramp": is_on_ramp,
             "is_exit_ramp": is_exit_ramp,
             "is_tunnel": is_tunnel,
@@ -467,6 +471,8 @@ def _execute_single_trace(
         return [
             {
                 "valhalla_type": "unmatched",
+                "valhalla_lat": None,
+                "valhalla_lon": None,
                 "is_on_ramp": False,
                 "is_exit_ramp": False,
                 "is_tunnel": False,
@@ -596,6 +602,8 @@ def enrich_gps_points(
     intersection_buffer_meters: float = 10.0,
     roundabout_buffer_meters: float = 10.0,
     interpolation_distance: float = 5.0,
+    preserve_coords: bool = False,
+    valhalla_coords: bool | None = None,
     chunk_size: int = 5000,
     auto_build_tiles: bool = True,
     osm_pbf: Union[str, Path, None] = None,
@@ -631,6 +639,7 @@ def enrich_gps_points(
         - country (str or None)
         - road_name (str or None)
         - road_type (str or None)
+        - valhalla_lat, valhalla_lon (float or None, if preserve_coords=True)
 
     Args:
         csv_input: CSV filepath, file buffer, CSV string, or DataFrame.
@@ -652,6 +661,10 @@ def enrich_gps_points(
         intersection_buffer_meters: Search radius around road intersections (default 10m).
         roundabout_buffer_meters: Buffer radius for roundabout entry/exit detection (default 10m).
         interpolation_distance: Distance threshold in meters for Valhalla Meili map matching (default 5m).
+        preserve_coords: If True, preserves original lat/lon coordinates in input columns and outputs
+            produced (matched or interpolated) coordinates as valhalla_lat and valhalla_lon. If False (default),
+            updates original coordinate columns with produced coordinates where matched.
+        valhalla_coords: Optional alias for preserve_coords.
         chunk_size: Maximum shape points per Valhalla request.
         auto_build_tiles: If True and local tiles are missing, downloads OSM data and builds them.
         osm_pbf: Path to local .osm.pbf file.
@@ -671,10 +684,16 @@ def enrich_gps_points(
         utm_crs=utm_crs,
     )
 
+    if valhalla_coords is not None:
+        preserve_coords = valhalla_coords
+
     if df.empty:
         # Return empty dataframe with target columns
         res_df = df.copy()
         res_df["valhalla_type"] = pd.Series(dtype=str)
+        if preserve_coords:
+            res_df["valhalla_lat"] = pd.Series(dtype=float)
+            res_df["valhalla_lon"] = pd.Series(dtype=float)
         res_df["is_on_ramp"] = pd.Series(dtype=bool)
         res_df["is_exit_ramp"] = pd.Series(dtype=bool)
         res_df["is_tunnel"] = pd.Series(dtype=bool)
@@ -761,6 +780,8 @@ def enrich_gps_points(
 
     default_attr = {
         "valhalla_type": "unmatched",
+        "valhalla_lat": None,
+        "valhalla_lon": None,
         "is_on_ramp": False,
         "is_exit_ramp": False,
         "is_tunnel": False,
@@ -958,6 +979,18 @@ def enrich_gps_points(
 
     # Construct output columns
     enriched_df = df.copy()
+    val_lats = [r.get("valhalla_lat") for r in matched_results]
+    val_lons = [r.get("valhalla_lon") for r in matched_results]
+
+    if preserve_coords:
+        enriched_df["valhalla_lat"] = val_lats
+        enriched_df["valhalla_lon"] = val_lons
+    else:
+        orig_lats = enriched_df[resolved_lat_col].to_numpy()
+        orig_lons = enriched_df[resolved_lon_col].to_numpy()
+        enriched_df[resolved_lat_col] = [v if v is not None else o for v, o in zip(val_lats, orig_lats)]
+        enriched_df[resolved_lon_col] = [v if v is not None else o for v, o in zip(val_lons, orig_lons)]
+
     enriched_df["valhalla_type"] = [r.get("valhalla_type", "unmatched") for r in matched_results]
     enriched_df["is_on_ramp"] = [r["is_on_ramp"] for r in matched_results]
     enriched_df["is_exit_ramp"] = [r["is_exit_ramp"] for r in matched_results]
