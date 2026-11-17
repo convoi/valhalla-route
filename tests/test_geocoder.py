@@ -29,6 +29,60 @@ def create_wkb_polygon(minx: float, miny: float, maxx: float, maxy: float) -> by
     return bytes(out)
 
 
+def create_wkb_polygon_with_hole(
+    ext_minx: float,
+    ext_miny: float,
+    ext_maxx: float,
+    ext_maxy: float,
+    hole_minx: float,
+    hole_miny: float,
+    hole_maxx: float,
+    hole_maxy: float,
+) -> bytes:
+    """Create a standard OGC WKB Polygon with one interior hole."""
+    out = bytearray()
+    out.append(1)  # little endian
+    out.extend(struct.pack("<I", 3))  # Polygon (3)
+    out.extend(struct.pack("<I", 2))  # 2 rings (exterior + hole)
+    # Exterior ring
+    out.extend(struct.pack("<I", 5))
+    for x, y in [
+        (ext_minx, ext_miny),
+        (ext_maxx, ext_miny),
+        (ext_maxx, ext_maxy),
+        (ext_minx, ext_maxy),
+        (ext_minx, ext_miny),
+    ]:
+        out.extend(struct.pack("<dd", x, y))
+    # Hole ring
+    out.extend(struct.pack("<I", 5))
+    for x, y in [
+        (hole_minx, hole_miny),
+        (hole_maxx, hole_miny),
+        (hole_maxx, hole_maxy),
+        (hole_minx, hole_maxy),
+        (hole_minx, hole_miny),
+    ]:
+        out.extend(struct.pack("<dd", x, y))
+    return bytes(out)
+
+
+def create_wkb_multipolygon(boxes: list[tuple[float, float, float, float]]) -> bytes:
+    """Create a standard OGC WKB MultiPolygon from rectangular boxes."""
+    out = bytearray()
+    out.append(1)  # little endian
+    out.extend(struct.pack("<I", 6))  # MultiPolygon (6)
+    out.extend(struct.pack("<I", len(boxes)))
+    for minx, miny, maxx, maxy in boxes:
+        out.append(1)
+        out.extend(struct.pack("<I", 3))  # Polygon (3)
+        out.extend(struct.pack("<I", 1))  # 1 ring
+        out.extend(struct.pack("<I", 5))
+        for x, y in [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy), (minx, miny)]:
+            out.extend(struct.pack("<dd", x, y))
+    return bytes(out)
+
+
 def test_spatialite_ring_parsing_and_point_in_polygon():
     # Box from (9.0, 52.0) to (10.0, 53.0)
     wkb = create_wkb_polygon(9.0, 52.0, 10.0, 53.0)
@@ -320,4 +374,367 @@ def test_admin_geocoder_parquet_lookup(synthetic_admin_parquet: Path):
     assert results[3]["county"] is None
     assert results[3]["admin1"] is None
     assert results[3]["country_code"] is None
+
+
+def test_admin_geocoder_parquet_boundaries_and_legacy_rounding(synthetic_admin_parquet: Path):
+    """Verify strict containment and exact coordinates on GeoParquet."""
+    geocoder = AdminGeocoder(admin_db_path=synthetic_admin_parquet)
+
+    # Southern boundary of Hannover city: lon [9.6, 9.9], lat [52.3, 52.5]
+    coords = [
+        (52.30, 9.75),   # Exactly on southern boundary: city excluded
+        (52.3006, 9.75), # Strictly inside Hannover
+    ]
+    res_exact = geocoder.lookup_coordinates(coords, precision_decimals=None)
+    assert res_exact[0]["city"] is None
+    assert res_exact[0]["county"] == "Region Hannover"
+    assert res_exact[1]["city"] == "Hannover"
+
+
+def test_exact_coordinates_boundaries(synthetic_admin_db: Path):
+    """Verify strict containment: polygon boundaries and corners are excluded."""
+    geocoder = AdminGeocoder(admin_db_path=synthetic_admin_db)
+
+    # Hannover city bounds: lon [9.6, 9.9], lat [52.3, 52.5]
+    # Region Hannover bounds: lon [9.5, 10.1], lat [52.1, 52.6]
+    coords = [
+        (52.35, 9.75),   # Strictly inside Hannover
+        (52.30, 9.75),   # Exactly on southern boundary of Hannover city
+        (52.50, 9.75),   # Exactly on northern boundary of Hannover city
+        (52.30, 9.60),   # Exactly on south-west corner of Hannover city
+        (52.29999, 9.75),  # Just outside southern boundary of Hannover city
+    ]
+    results = geocoder.lookup_coordinates(coords, precision_decimals=None)
+
+    # Strictly inside
+    assert results[0]["city"] == "Hannover"
+    assert results[0]["county"] == "Region Hannover"
+
+    # Exactly on boundary / corner: city must be excluded by strict containment
+    assert results[1]["city"] is None
+    assert results[1]["county"] == "Region Hannover"  # (52.3, 9.75) is strictly inside Region Hannover [52.1, 52.6]
+
+    assert results[2]["city"] is None
+    assert results[2]["county"] == "Region Hannover"
+
+    assert results[3]["city"] is None
+    assert results[3]["county"] == "Region Hannover"
+
+    # Just outside
+    assert results[4]["city"] is None
+    assert results[4]["county"] == "Region Hannover"
+
+
+def test_legacy_rounding_vs_exact_coordinates(tmp_path: Path):
+    """Verify default exact deduplication vs explicit legacy precision_decimals=3 rounding."""
+    db_file = tmp_path / "test_rounding_admins.sqlite"
+    conn = init_valhalla_admin_sqlite(db_file)
+    cur = conn.cursor()
+
+    # City covering lon [9.6, 9.8], lat [52.3000, 52.3008]
+    wkb_city = create_wkb_polygon(9.6, 52.3000, 9.8, 52.3008)
+    blob_city = wkb_to_spatialite_blob(wkb_city, 9.6, 52.3000, 9.8, 52.3008)
+    cur.execute(
+        """
+        INSERT INTO admins (admin_level, iso_code, parent_admin, name, name_en, drive_on_right, allow_intersection_names, geom)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (8, "DE", None, "BoundaryCity", "BoundaryCity", 1, 1, blob_city),
+    )
+    city_id = cur.lastrowid
+    cur.execute(
+        "INSERT INTO idx_admins_geom (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",
+        (city_id, 9.6, 9.8, 52.3000, 52.3008),
+    )
+    conn.commit()
+    conn.close()
+
+    geocoder = AdminGeocoder(admin_db_path=db_file)
+
+    # Point at (52.3006, 9.70):
+    # - Exact coordinate: 52.3006 is inside [52.3000, 52.3008]
+    # - Rounded (precision_decimals=3): round(52.3006, 3) = 52.301, which is outside > 52.3008!
+    coords = [(52.3006, 9.70)]
+
+    # Default exact coordinates
+    res_exact = geocoder.lookup_coordinates(coords, precision_decimals=None)
+    assert res_exact[0]["city"] == "BoundaryCity"
+
+    # Explicit legacy 3-decimal rounding
+    res_rounded = geocoder.lookup_coordinates(coords, precision_decimals=3)
+    assert res_rounded[0]["city"] is None
+
+
+def test_overlapping_polygons_and_admin_precedence(tmp_path: Path):
+    """Verify first-match rule and level precedence when candidate polygons overlap."""
+    db_file = tmp_path / "test_precedence.sqlite"
+    conn = init_valhalla_admin_sqlite(db_file)
+    cur = conn.cursor()
+
+    # Two overlapping level 8 cities in the same region: [9.0, 52.0] to [10.0, 53.0]
+    wkb1 = create_wkb_polygon(9.0, 52.0, 10.0, 53.0)
+    blob1 = wkb_to_spatialite_blob(wkb1, 9.0, 52.0, 10.0, 53.0)
+    cur.execute(
+        """
+        INSERT INTO admins (admin_level, iso_code, parent_admin, name, name_en, drive_on_right, allow_intersection_names, geom)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (8, "DE", None, "FirstCity", "FirstCity", 1, 1, blob1),
+    )
+    id1 = cur.lastrowid
+    cur.execute(
+        "INSERT INTO idx_admins_geom (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",
+        (id1, 9.0, 10.0, 52.0, 53.0),
+    )
+
+    wkb2 = create_wkb_polygon(9.0, 52.0, 10.0, 53.0)
+    blob2 = wkb_to_spatialite_blob(wkb2, 9.0, 52.0, 10.0, 53.0)
+    cur.execute(
+        """
+        INSERT INTO admins (admin_level, iso_code, parent_admin, name, name_en, drive_on_right, allow_intersection_names, geom)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (8, "DE", None, "SecondCity", "SecondCity", 1, 1, blob2),
+    )
+    id2 = cur.lastrowid
+    cur.execute(
+        "INSERT INTO idx_admins_geom (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",
+        (id2, 9.0, 10.0, 52.0, 53.0),
+    )
+
+    # Level 6 county covering the same area
+    wkb_county = create_wkb_polygon(9.0, 52.0, 10.0, 53.0)
+    blob_county = wkb_to_spatialite_blob(wkb_county, 9.0, 52.0, 10.0, 53.0)
+    cur.execute(
+        """
+        INSERT INTO admins (admin_level, iso_code, parent_admin, name, name_en, drive_on_right, allow_intersection_names, geom)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (6, "DE", None, "PrimaryCounty", "PrimaryCounty", 1, 1, blob_county),
+    )
+    id3 = cur.lastrowid
+    cur.execute(
+        "INSERT INTO idx_admins_geom (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",
+        (id3, 9.0, 10.0, 52.0, 53.0),
+    )
+
+    conn.commit()
+    conn.close()
+
+    geocoder = AdminGeocoder(admin_db_path=db_file)
+    results = geocoder.lookup_coordinates([(52.5, 9.5)])
+    assert len(results) == 1
+    # First candidate in traversal order wins
+    assert results[0]["city"] == "FirstCity"
+    assert results[0]["county"] == "PrimaryCounty"
+
+
+def test_polygon_holes_and_multipolygons(tmp_path: Path):
+    """Verify geometry parsing and containment for polygon holes and multipolygons."""
+    db_file = tmp_path / "test_holes.sqlite"
+    conn = init_valhalla_admin_sqlite(db_file)
+    cur = conn.cursor()
+
+    # 1. City with a hole: exterior [0, 0] to [10, 10], hole [3, 3] to [7, 7]
+    wkb_hole = create_wkb_polygon_with_hole(0.0, 0.0, 10.0, 10.0, 3.0, 3.0, 7.0, 7.0)
+    blob_hole = wkb_to_spatialite_blob(wkb_hole, 0.0, 0.0, 10.0, 10.0)
+    cur.execute(
+        """
+        INSERT INTO admins (admin_level, iso_code, parent_admin, name, name_en, drive_on_right, allow_intersection_names, geom)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (8, "DE", None, "DonutCity", "DonutCity", 1, 1, blob_hole),
+    )
+    id_hole = cur.lastrowid
+    cur.execute(
+        "INSERT INTO idx_admins_geom (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",
+        (id_hole, 0.0, 10.0, 0.0, 10.0),
+    )
+
+    # 2. MultiPolygon state with two disjoint islands: [20, 20] to [22, 22] and [25, 25] to [27, 27]
+    wkb_mp = create_wkb_multipolygon([(20.0, 20.0, 22.0, 22.0), (25.0, 25.0, 27.0, 27.0)])
+    blob_mp = wkb_to_spatialite_blob(wkb_mp, 20.0, 20.0, 27.0, 27.0)
+    cur.execute(
+        """
+        INSERT INTO admins (admin_level, iso_code, parent_admin, name, name_en, drive_on_right, allow_intersection_names, geom)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (4, "DE-IS", None, "IslandState", "IslandState", 1, 1, blob_mp),
+    )
+    id_mp = cur.lastrowid
+    cur.execute(
+        "INSERT INTO idx_admins_geom (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",
+        (id_mp, 20.0, 27.0, 20.0, 27.0),
+    )
+
+    conn.commit()
+    conn.close()
+
+    geocoder = AdminGeocoder(admin_db_path=db_file)
+
+    coords = [
+        (1.0, 1.0),   # Inside DonutCity exterior
+        (5.0, 5.0),   # Inside DonutCity hole
+        (21.0, 21.0), # Island 1
+        (26.0, 26.0), # Island 2
+        (23.5, 23.5), # In between islands
+    ]
+    results = geocoder.lookup_coordinates(coords)
+
+    assert results[0]["city"] == "DonutCity"
+    assert results[1]["city"] is None
+
+    assert results[2]["admin1"] == "IslandState"
+    assert results[3]["admin1"] == "IslandState"
+    assert results[4]["admin1"] is None
+
+
+def test_edge_cases_empty_no_candidates_duplicates(synthetic_admin_db: Path):
+    """Verify empty input, no candidates, and duplicate coordinates."""
+    geocoder = AdminGeocoder(admin_db_path=synthetic_admin_db)
+
+    # Empty coords
+    assert geocoder.lookup_coordinates([]) == []
+
+    # Coordinates with no candidates (e.g. far offshore)
+    no_cand_results = geocoder.lookup_coordinates([(0.0, 0.0), (-30.0, 120.0)])
+    assert len(no_cand_results) == 2
+    assert all(r["city"] is None and r["country_code"] is None for r in no_cand_results)
+
+    # Duplicate coordinates
+    dup_coords = [(52.37, 9.74), (45.0, 2.0), (52.37, 9.74), (52.25, 9.55), (45.0, 2.0)]
+    dup_results = geocoder.lookup_coordinates(dup_coords)
+    assert len(dup_results) == 5
+    assert dup_results[0]["city"] == "Hannover"
+    assert dup_results[1]["city"] is None
+    assert dup_results[2]["city"] == "Hannover"
+    assert dup_results[3]["county"] == "Region Hannover"
+    assert dup_results[4]["city"] is None
+
+
+def test_inputs_spanning_multiple_batches(synthetic_admin_db: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verify coordinate batches crossing GEOCODE_BATCH_SIZE chunk boundaries."""
+    import valhallaroute.geocoder as gc_mod
+
+    # Set batch size small to force multiple batches
+    monkeypatch.setattr(gc_mod, "GEOCODE_BATCH_SIZE", 5)
+
+    geocoder = AdminGeocoder(admin_db_path=synthetic_admin_db)
+
+    # Generate 23 distinct coordinates alternating inside and outside Hannover
+    coords = []
+    for i in range(23):
+        if i % 2 == 0:
+            coords.append((52.35 + (i * 0.001), 9.75 + (i * 0.001)))  # Inside Hannover
+        else:
+            coords.append((45.0 + (i * 0.1), 2.0 + (i * 0.1)))       # Outside Germany
+
+    results = geocoder.lookup_coordinates(coords)
+    assert len(results) == 23
+    for i, r in enumerate(results):
+        if i % 2 == 0:
+            assert r["city"] == "Hannover"
+            assert r["country_code"] == "DE"
+        else:
+            assert r["city"] is None
+            assert r["country_code"] is None
+
+
+def test_no_shapely_fallback(synthetic_admin_db: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verify fallback pure-Python ray casting when Shapely is unavailable."""
+    import valhallaroute.geocoder as gc_mod
+
+    monkeypatch.setattr(gc_mod, "HAS_SHAPELY", False)
+
+    geocoder = AdminGeocoder(admin_db_path=synthetic_admin_db)
+    coords = [
+        (52.37, 9.74),   # Inside Hannover
+        (52.25, 9.55),   # Outside Hannover, inside Region Hannover
+        (52.8, 9.5),     # Inside Niedersachsen
+        (45.0, 2.0),     # Outside
+    ]
+    results = geocoder.lookup_coordinates(coords)
+    assert len(results) == 4
+    assert results[0]["city"] == "Hannover"
+    assert results[0]["county"] == "Region Hannover"
+    assert results[1]["city"] is None
+    assert results[1]["county"] == "Region Hannover"
+    assert results[2]["city"] is None
+    assert results[2]["county"] is None
+    assert results[2]["admin1"] == "Niedersachsen"
+    assert results[3]["country_code"] is None
+
+
+def test_indexed_vs_scalar_containment_reference(synthetic_admin_db: Path):
+    """Verify that vectorized STRtree lookup produces identical results to scalar containment."""
+    import shapely
+
+    geocoder = AdminGeocoder(admin_db_path=synthetic_admin_db)
+
+    # Generate a grid of 60 test points
+    coords = []
+    for lat_i in range(10):
+        for lon_i in range(6):
+            lat = 52.1 + lat_i * 0.06
+            lon = 9.4 + lon_i * 0.12
+            coords.append((lat, lon))
+
+    # Fast indexed batch lookup
+    indexed_results = geocoder.lookup_coordinates(coords, precision_decimals=None)
+
+    # Reference scalar point-by-point containment lookup
+    raw_candidates = geocoder._query_sqlite_candidates(
+        min(c[1] for c in coords),
+        min(c[0] for c in coords),
+        max(c[1] for c in coords),
+        max(c[0] for c in coords),
+    )
+    ref_candidates = []
+    for rowid, admin_level, name, iso_code, geom_blob, xmin, ymin, xmax, ymax in raw_candidates:
+        geom = geocoder._geom_cache.get(rowid)
+        if geom is None:
+            try:
+                geom = shapely.from_wkb(bytes(geom_blob))
+            except Exception:
+                rings = parse_spatialite_rings(geom_blob)
+                polys = [Polygon(r[0], r[1:] if len(r) > 1 else None) for r in rings if r]
+                geom = MultiPolygon(polys) if polys else None
+        ref_candidates.append((admin_level, name, iso_code, geom, (xmin, ymin, xmax, ymax)))
+
+    scalar_results = []
+    for lat, lon in coords:
+        res = {
+            "city": None,
+            "county": None,
+            "country_code": None,
+            "country": None,
+            "admin1": None,
+            "admin2": None,
+        }
+        for admin_level, name, iso_code, geom, (xmin, ymin, xmax, ymax) in ref_candidates:
+            if not (xmin <= lon <= xmax and ymin <= lat <= ymax):
+                continue
+            if shapely.contains_xy(geom, lon, lat):
+                if admin_level in (7, 8, 9, 10) and not res["city"]:
+                    res["city"] = name
+                elif admin_level in (5, 6):
+                    if not res["county"]:
+                        res["county"] = name
+                    if not res["admin2"]:
+                        res["admin2"] = name
+                elif admin_level in (3, 4) and not res["admin1"]:
+                    res["admin1"] = name
+                elif admin_level == 2:
+                    if not res["country_code"]:
+                        res["country_code"] = iso_code
+                    if not res["country"]:
+                        res["country"] = name
+                if res["city"] and res["county"] and res["admin1"] and res["country_code"]:
+                    break
+        scalar_results.append(res)
+
+    assert len(indexed_results) == len(scalar_results)
+    for idx, (res_indexed, res_scalar) in enumerate(zip(indexed_results, scalar_results)):
+        assert res_indexed == res_scalar, f"Mismatch at index {idx} ({coords[idx]}): {res_indexed} != {res_scalar}"
+
 

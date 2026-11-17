@@ -173,19 +173,19 @@ df = enrich_gps_points(io.StringIO(csv_content), tile_extract="valhalla_tiles.ta
 
 ### 4. Fast Offline Reverse Geocoding (`AdminGeocoder`)
 
-ValhallaRoute includes a high-throughput, 100% offline reverse geocoder backed by `admin.sqlite` (compiled from Overture Maps / OSM administrative boundaries):
-* **Thread-Safe & Process-Safe:** Read-only SQLite with R-tree spatial index (`idx_admins_geom`).
-* **Ultra-Fast:** Over 610,000 points/second using vectorized Shapely C-acceleration and bounding-box candidate pre-filtering (8.6x faster than legacy `reverse_geocoder`).
-* **Hierarchical Resolution:** Resolves country, ISO-3166 code, state/province, county, and municipality/borough.
+ValhallaRoute includes a high-throughput, 100% offline reverse geocoder backed by `admin.sqlite` (or `admin.parquet` compiled from Overture Maps / OSM administrative boundaries):
+* **Thread-Safe & Process-Safe:** Read-only SQLite with R-tree spatial index (`idx_admins_geom`) or GeoParquet via DuckDB.
+* **Vectorized STRtree Spatial Indexing:** Uses Shapely `STRtree` spatial indexing over candidate boundaries processed in bounded coordinate batches (8,192 points), with vectorized C-accelerated `contains_xy` evaluation.
+* **Exact Coordinates by Default:** Defaults to exact coordinates (`precision_decimals=None`), deduplicating only identical points without boundary drift (pass `precision_decimals=3` for legacy ~100m rounded deduplication).
+* **Hierarchical Resolution:** Resolves country, ISO-3166 code, state/province (`admin1`), county (`admin2`), and municipality/city.
 
 ```python
-from valhallaroute import AdminGeocoder, enrich_gps_points
+from valhallaroute import AdminGeocoder, enrich_gps_points, lookup_coordinates
 
-# Direct geocoding lookup
-geocoder = AdminGeocoder("admin.sqlite")
-info = geocoder.lookup(52.3759, 9.7320)
-print(info)
-# {'country': 'Germany', 'country_code': 'DE', 'state': 'Niedersachsen', 'city': 'Hannover'}
+# Direct geocoding lookup (exact coordinates by default)
+results = lookup_coordinates([(52.3759, 9.7320)], admin_db_path="admin.sqlite")
+print(results[0])
+# {'city': 'Hannover', 'county': 'Region Hannover', 'admin1': 'Niedersachsen', 'admin2': 'Region Hannover', 'country': 'Deutschland', 'country_code': 'DE'}
 
 # Used automatically during GPS point enrichment
 df = enrich_gps_points("trip.csv", admin_db_path="admin.sqlite")

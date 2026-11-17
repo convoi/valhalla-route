@@ -138,11 +138,15 @@ def point_in_multipolygon(x: float, y: float, polys: list[list[list[tuple[float,
 
 
 try:
+    import numpy as np
     import shapely
     from shapely.geometry import MultiPolygon, Polygon
+
     HAS_SHAPELY = True
 except ImportError:
     HAS_SHAPELY = False
+
+GEOCODE_BATCH_SIZE: int = 8192
 
 
 class AdminGeocoder:
@@ -271,13 +275,15 @@ class AdminGeocoder:
     def lookup_coordinates(
         self,
         coords: Sequence[tuple[float, float]],
-        precision_decimals: int = 3,
+        precision_decimals: int | None = None,
     ) -> list[dict[str, Any]]:
         """Look up city, county, state, and country for a sequence of (latitude, longitude) coordinates.
 
         Args:
             coords: Sequence of (lat, lon) float tuples.
-            precision_decimals: Decimal places to round for caching (~100m at 3 decimals).
+            precision_decimals: Optional decimal places to round coordinates for deduplication.
+                Defaults to None (exact coordinates; deduplicating only identical points).
+                Pass precision_decimals=3 to restore legacy behavior (~100m coordinate rounding).
 
         Returns:
             List of dicts with keys: 'city', 'county', 'country_code', 'country', 'admin1', 'admin2'.
@@ -297,17 +303,25 @@ class AdminGeocoder:
         if not self.has_admin_db:
             return [default_result.copy() for _ in range(len(coords))]
 
-        # Deduplicate points using rounded coordinates
+        # Deduplicate points using exact coordinates by default, or rounded coordinates if precision_decimals is set
         unique_keys: list[tuple[float, float]] = []
         seen: dict[tuple[float, float], int] = {}
         indices: list[int] = []
 
-        for c in coords:
-            key = (round(c[0], precision_decimals), round(c[1], precision_decimals))
-            if key not in seen:
-                seen[key] = len(unique_keys)
-                unique_keys.append(key)
-            indices.append(seen[key])
+        if precision_decimals is None:
+            for c in coords:
+                key = (c[0], c[1])
+                if key not in seen:
+                    seen[key] = len(unique_keys)
+                    unique_keys.append(key)
+                indices.append(seen[key])
+        else:
+            for c in coords:
+                key = (round(c[0], precision_decimals), round(c[1], precision_decimals))
+                if key not in seen:
+                    seen[key] = len(unique_keys)
+                    unique_keys.append(key)
+                indices.append(seen[key])
 
         min_lat = min(k[0] for k in unique_keys)
         max_lat = max(k[0] for k in unique_keys)
@@ -318,6 +332,9 @@ class AdminGeocoder:
             raw_candidates = self._query_parquet_candidates(min_lon, min_lat, max_lon, max_lat)
         else:
             raw_candidates = self._query_sqlite_candidates(min_lon, min_lat, max_lon, max_lat)
+
+        if not raw_candidates:
+            return [default_result.copy() for _ in range(len(coords))]
 
         # Prepare geometries once for all candidate admins covering the trajectory
         prepared_candidates = []
@@ -357,23 +374,50 @@ class AdminGeocoder:
                     (cache_key, admin_level, name, iso_code, geom_obj, (b_xmin, b_ymin, b_xmax, b_ymax))
                 )
 
-        unique_results: list[dict[str, Any]] = []
+        if not prepared_candidates:
+            return [default_result.copy() for _ in range(len(coords))]
 
-        for lat, lon in unique_keys:
-            res = default_result.copy()
+        unique_results: list[dict[str, Any]] = [default_result.copy() for _ in range(len(unique_keys))]
 
-            for rowid, admin_level, name, iso_code, geom_obj, (b_minx, b_miny, b_maxx, b_maxy) in prepared_candidates:
-                # Fast MBR filter
-                if not (b_minx <= lon <= b_maxx and b_miny <= lat <= b_maxy):
+        if HAS_SHAPELY:
+            cand_geoms = np.array([c[4] for c in prepared_candidates])
+            tree = shapely.STRtree(cand_geoms)
+
+            num_unique = len(unique_keys)
+            for batch_start in range(0, num_unique, GEOCODE_BATCH_SIZE):
+                batch_end = min(batch_start + GEOCODE_BATCH_SIZE, num_unique)
+                batch_keys = unique_keys[batch_start:batch_end]
+                batch_len = len(batch_keys)
+
+                batch_lats = np.fromiter((k[0] for k in batch_keys), dtype=np.float64, count=batch_len)
+                batch_lons = np.fromiter((k[1] for k in batch_keys), dtype=np.float64, count=batch_len)
+
+                pts = shapely.points(batch_lons, batch_lats)
+                pt_indices, geom_indices = tree.query(pts)
+
+                if len(pt_indices) == 0:
                     continue
 
-                if HAS_SHAPELY:
-                    is_inside = shapely.contains_xy(geom_obj, lon, lat)
-                else:
-                    is_inside = point_in_multipolygon(lon, lat, geom_obj)
+                contained = shapely.contains_xy(
+                    cand_geoms[geom_indices],
+                    batch_lons[pt_indices],
+                    batch_lats[pt_indices],
+                )
 
-                if is_inside:
-                    # Admin levels: 8=city/locality, 6=county, 4=state/region, 2=country
+                valid_pts = pt_indices[contained]
+                valid_geoms = geom_indices[contained]
+
+                if len(valid_pts) == 0:
+                    continue
+
+                order = np.lexsort((valid_geoms, valid_pts))
+
+                for p_idx, g_idx in zip(valid_pts[order], valid_geoms[order]):
+                    res = unique_results[batch_start + p_idx]
+                    if res["city"] and res["county"] and res["admin1"] and res["country_code"]:
+                        continue
+
+                    _, admin_level, name, iso_code, _, _ = prepared_candidates[g_idx]
                     if admin_level in (7, 8, 9, 10) and not res["city"]:
                         res["city"] = name
                     elif admin_level in (5, 6):
@@ -388,11 +432,29 @@ class AdminGeocoder:
                             res["country_code"] = iso_code
                         if not res["country"]:
                             res["country"] = name
-
-                    if res["city"] and res["county"] and res["admin1"] and res["country_code"]:
-                        break
-
-            unique_results.append(res)
+        else:
+            for i, (lat, lon) in enumerate(unique_keys):
+                res = unique_results[i]
+                for _, admin_level, name, iso_code, rings, (b_minx, b_miny, b_maxx, b_maxy) in prepared_candidates:
+                    if not (b_minx <= lon <= b_maxx and b_miny <= lat <= b_maxy):
+                        continue
+                    if point_in_multipolygon(lon, lat, rings):
+                        if admin_level in (7, 8, 9, 10) and not res["city"]:
+                            res["city"] = name
+                        elif admin_level in (5, 6):
+                            if not res["county"]:
+                                res["county"] = name
+                            if not res["admin2"]:
+                                res["admin2"] = name
+                        elif admin_level in (3, 4) and not res["admin1"]:
+                            res["admin1"] = name
+                        elif admin_level == 2:
+                            if not res["country_code"]:
+                                res["country_code"] = iso_code
+                            if not res["country"]:
+                                res["country"] = name
+                        if res["city"] and res["county"] and res["admin1"] and res["country_code"]:
+                            break
 
         return [unique_results[idx] for idx in indices]
 
@@ -404,14 +466,16 @@ _GEOCODER_LOCK = threading.Lock()
 def lookup_coordinates(
     coords: Sequence[tuple[float, float]],
     admin_db_path: Path | str | None = None,
-    precision_decimals: int = 3,
+    precision_decimals: int | None = None,
 ) -> list[dict[str, Any]]:
     """Look up city, county, and country for a sequence of (latitude, longitude) coordinates.
 
     Args:
         coords: Sequence of (lat, lon) float tuples.
         admin_db_path: Optional explicit path to admin database (.sqlite or .parquet).
-        precision_decimals: Decimal places to round for caching (~100m at 3 decimals).
+        precision_decimals: Optional decimal places to round coordinates for deduplication.
+            Defaults to None (exact coordinates; deduplicating only identical points).
+            Pass precision_decimals=3 to restore legacy behavior (~100m coordinate rounding).
 
     Returns:
         List of dicts with keys: 'city', 'county', 'country_code', 'country', 'admin1', 'admin2'.
