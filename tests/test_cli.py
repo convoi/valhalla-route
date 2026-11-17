@@ -37,6 +37,7 @@ def test_cli_execution(tmp_path: Path):
     assert "is_bridge" in df.columns
     assert "is_crossing" in df.columns
     assert "city" in df.columns
+    assert "county" in df.columns
     assert "country" in df.columns
     assert "road_name" in df.columns
     assert "road_type" in df.columns

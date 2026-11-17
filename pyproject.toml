@@ -33,3 +33,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["valhallaroute"]
+
+[tool.pytest.ini_options]
+addopts = "--basetemp=.tmp_pytest -o cache_dir=.tmp_cache"

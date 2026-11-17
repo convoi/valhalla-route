@@ -96,7 +96,24 @@ def synthetic_admin_db(tmp_path: Path) -> Path:
         (state_id, 8.0, 11.5, 51.3, 53.9),
     )
 
-    # 3. City: Hannover (covering 9.6 to 9.9 lon, 52.3 to 52.5 lat)
+    # 3. County: Region Hannover (covering 9.5 to 10.1 lon, 52.1 to 52.6 lat)
+    wkb_county = create_wkb_polygon(9.5, 52.1, 10.1, 52.6)
+    blob_county = wkb_to_spatialite_blob(wkb_county, 9.5, 52.1, 10.1, 52.6)
+    cur.execute(
+        """
+        INSERT INTO admins (admin_level, iso_code, parent_admin,
+                            name, name_en, drive_on_right, allow_intersection_names, geom)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (6, "DE", state_id, "Region Hannover", "Hanover Region", 1, 1, blob_county),
+    )
+    county_id = cur.lastrowid
+    cur.execute(
+        "INSERT INTO idx_admins_geom (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",
+        (county_id, 9.5, 10.1, 52.1, 52.6),
+    )
+
+    # 4. City: Hannover (covering 9.6 to 9.9 lon, 52.3 to 52.5 lat)
     wkb_city = create_wkb_polygon(9.6, 52.3, 9.9, 52.5)
     blob_city = wkb_to_spatialite_blob(wkb_city, 9.6, 52.3, 9.9, 52.5)
     cur.execute(
@@ -105,7 +122,7 @@ def synthetic_admin_db(tmp_path: Path) -> Path:
                             name, name_en, drive_on_right, allow_intersection_names, geom)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (8, "DE", state_id, "Hannover", "Hanover", 1, 1, blob_city),
+        (8, "DE", county_id, "Hannover", "Hanover", 1, 1, blob_city),
     )
     city_id = cur.lastrowid
     cur.execute(
@@ -123,32 +140,45 @@ def test_admin_geocoder_lookup(synthetic_admin_db: Path):
     assert geocoder.has_admin_db is True
 
     # Point inside Hannover: (lat=52.37, lon=9.74)
-    # Point outside Hannover but inside Niedersachsen: (lat=52.8, lon=9.5)
+    # Point outside Hannover but inside Region Hannover: (lat=52.25, lon=9.55)
+    # Point outside Region Hannover but inside Niedersachsen: (lat=52.8, lon=9.5)
     # Point outside Germany: (lat=45.0, lon=2.0)
     coords = [
         (52.37, 9.74),
+        (52.25, 9.55),
         (52.8, 9.5),
         (45.0, 2.0),
     ]
 
     results = geocoder.lookup_coordinates(coords)
-    assert len(results) == 3
+    assert len(results) == 4
 
     # Inside Hannover
     assert results[0]["city"] == "Hannover"
+    assert results[0]["county"] == "Region Hannover"
+    assert results[0]["admin2"] == "Region Hannover"
     assert results[0]["admin1"] == "Niedersachsen"
     assert results[0]["country_code"] == "DE"
     assert results[0]["country"] == "Deutschland"
 
-    # Outside Hannover, inside Niedersachsen
+    # Outside Hannover, inside Region Hannover
     assert results[1]["city"] is None
+    assert results[1]["county"] == "Region Hannover"
+    assert results[1]["admin2"] == "Region Hannover"
     assert results[1]["admin1"] == "Niedersachsen"
     assert results[1]["country_code"] == "DE"
 
-    # Outside Germany
+    # Outside Region Hannover, inside Niedersachsen
     assert results[2]["city"] is None
-    assert results[2]["admin1"] is None
-    assert results[2]["country_code"] is None
+    assert results[2]["county"] is None
+    assert results[2]["admin1"] == "Niedersachsen"
+    assert results[2]["country_code"] == "DE"
+
+    # Outside Germany
+    assert results[3]["city"] is None
+    assert results[3]["county"] is None
+    assert results[3]["admin1"] is None
+    assert results[3]["country_code"] is None
 
 
 def test_admin_geocoder_multithreading(synthetic_admin_db: Path):
@@ -216,6 +246,18 @@ def synthetic_admin_parquet(tmp_path: Path) -> Path:
         ST_AsWKB(ST_GeomFromText('POLYGON ((8.0 51.3, 11.5 51.3, 11.5 53.9, 8.0 53.9, 8.0 51.3))')) AS geom
     UNION ALL
     SELECT
+        'div_county' AS division_id,
+        6 AS admin_level,
+        'DE' AS iso_code,
+        'Region Hannover' AS name,
+        'Hanover Region' AS name_en,
+        9.5 AS xmin,
+        52.1 AS ymin,
+        10.1 AS xmax,
+        52.6 AS ymax,
+        ST_AsWKB(ST_GeomFromText('POLYGON ((9.5 52.1, 10.1 52.1, 10.1 52.6, 9.5 52.6, 9.5 52.1))')) AS geom
+    UNION ALL
+    SELECT
         'div_city' AS division_id,
         8 AS admin_level,
         'DE' AS iso_code,
@@ -239,27 +281,43 @@ def test_admin_geocoder_parquet_lookup(synthetic_admin_parquet: Path):
     assert geocoder.has_admin_db is True
     assert geocoder.is_parquet is True
 
+    # Point inside Hannover: (lat=52.37, lon=9.74)
+    # Point outside Hannover but inside Region Hannover: (lat=52.25, lon=9.55)
+    # Point outside Region Hannover but inside Niedersachsen: (lat=52.8, lon=9.5)
+    # Point outside Germany: (lat=45.0, lon=2.0)
     coords = [
         (52.37, 9.74),
+        (52.25, 9.55),
         (52.8, 9.5),
         (45.0, 2.0),
     ]
     results = geocoder.lookup_coordinates(coords)
-    assert len(results) == 3
+    assert len(results) == 4
 
     # Inside Hannover
     assert results[0]["city"] == "Hannover"
+    assert results[0]["county"] == "Region Hannover"
+    assert results[0]["admin2"] == "Region Hannover"
     assert results[0]["admin1"] == "Niedersachsen"
     assert results[0]["country_code"] == "DE"
     assert results[0]["country"] == "Deutschland"
 
-    # Outside Hannover, inside Niedersachsen
+    # Outside Hannover, inside Region Hannover
     assert results[1]["city"] is None
+    assert results[1]["county"] == "Region Hannover"
+    assert results[1]["admin2"] == "Region Hannover"
     assert results[1]["admin1"] == "Niedersachsen"
     assert results[1]["country_code"] == "DE"
 
-    # Outside Germany
+    # Outside Region Hannover, inside Niedersachsen
     assert results[2]["city"] is None
-    assert results[2]["admin1"] is None
-    assert results[2]["country_code"] is None
+    assert results[2]["county"] is None
+    assert results[2]["admin1"] == "Niedersachsen"
+    assert results[2]["country_code"] == "DE"
+
+    # Outside Germany
+    assert results[3]["city"] is None
+    assert results[3]["county"] is None
+    assert results[3]["admin1"] is None
+    assert results[3]["country_code"] is None
 

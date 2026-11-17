@@ -273,20 +273,21 @@ class AdminGeocoder:
         coords: Sequence[tuple[float, float]],
         precision_decimals: int = 3,
     ) -> list[dict[str, Any]]:
-        """Look up city, state, and country for a sequence of (latitude, longitude) coordinates.
+        """Look up city, county, state, and country for a sequence of (latitude, longitude) coordinates.
 
         Args:
             coords: Sequence of (lat, lon) float tuples.
             precision_decimals: Decimal places to round for caching (~100m at 3 decimals).
 
         Returns:
-            List of dicts with keys: 'city', 'country_code', 'country', 'admin1', 'admin2'.
+            List of dicts with keys: 'city', 'county', 'country_code', 'country', 'admin1', 'admin2'.
         """
         if not coords:
             return []
 
         default_result = {
             "city": None,
+            "county": None,
             "country_code": None,
             "country": None,
             "admin1": None,
@@ -375,8 +376,11 @@ class AdminGeocoder:
                     # Admin levels: 8=city/locality, 6=county, 4=state/region, 2=country
                     if admin_level in (7, 8, 9, 10) and not res["city"]:
                         res["city"] = name
-                    elif admin_level in (5, 6) and not res["admin2"]:
-                        res["admin2"] = name
+                    elif admin_level in (5, 6):
+                        if not res["county"]:
+                            res["county"] = name
+                        if not res["admin2"]:
+                            res["admin2"] = name
                     elif admin_level in (3, 4) and not res["admin1"]:
                         res["admin1"] = name
                     elif admin_level == 2:
@@ -385,7 +389,7 @@ class AdminGeocoder:
                         if not res["country"]:
                             res["country"] = name
 
-                    if res["city"] and res["admin1"] and res["country_code"]:
+                    if res["city"] and res["county"] and res["admin1"] and res["country_code"]:
                         break
 
             unique_results.append(res)
@@ -402,15 +406,15 @@ def lookup_coordinates(
     admin_db_path: Path | str | None = None,
     precision_decimals: int = 3,
 ) -> list[dict[str, Any]]:
-    """Look up city and country for a sequence of (latitude, longitude) coordinates using admin.sqlite.
+    """Look up city, county, and country for a sequence of (latitude, longitude) coordinates.
 
     Args:
         coords: Sequence of (lat, lon) float tuples.
-        admin_db_path: Optional explicit path to admin.sqlite database.
+        admin_db_path: Optional explicit path to admin database (.sqlite or .parquet).
         precision_decimals: Decimal places to round for caching (~100m at 3 decimals).
 
     Returns:
-        List of dicts with keys: 'city', 'country_code', 'country', 'admin1', 'admin2'.
+        List of dicts with keys: 'city', 'county', 'country_code', 'country', 'admin1', 'admin2'.
     """
     global _GLOBAL_GEOCODER
     if admin_db_path:

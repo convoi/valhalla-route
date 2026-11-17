@@ -237,6 +237,7 @@ def _process_trace_attributes_response(
         road_name = None
         road_type = None
         country = None
+        county = None
         city = None
 
         if pt_type in ("matched", "interpolated") and edge_index is not None and 0 <= edge_index < len(edges):
@@ -387,6 +388,9 @@ def _process_trace_attributes_response(
                 c_city = admin_obj.get("city")
                 if c_city and c_city != "None":
                     city = c_city
+                c_county = admin_obj.get("county") or admin_obj.get("admin2")
+                if c_county and c_county != "None":
+                    county = c_county
 
         results.append({
             "valhalla_type": pt_type,
@@ -411,6 +415,7 @@ def _process_trace_attributes_response(
             "is_roundabout": is_roundabout,
             "roundabout_action": roundabout_action,
             "city": city,
+            "county": county,
             "country": country,
             "road_name": road_name,
             "road_type": road_type,
@@ -479,6 +484,7 @@ def _execute_single_trace(
                 "is_roundabout": False,
                 "roundabout_action": None,
                 "city": None,
+                "county": None,
                 "country": None,
                 "road_name": None,
                 "road_type": None,
@@ -597,6 +603,7 @@ def enrich_gps_points(
         - is_roundabout (bool)
         - roundabout_action (str or None)
         - city (str or None)
+        - county (str or None)
         - country (str or None)
         - road_name (str or None)
         - road_type (str or None)
@@ -616,7 +623,7 @@ def enrich_gps_points(
         time_col: Custom name for timestamp column.
         trip_col: Custom name for trip ID column (groups points by trip).
         utm_crs: Coordinate reference system for projected UTM data (default EPSG:32632).
-        reverse_geocode_cities: If True, resolves city/country using offline reverse geocoding.
+        reverse_geocode_cities: If True, resolves city/county/country using offline reverse geocoding.
         crossing_buffer_meters: Search radius around OSM crossings (default 10m).
         intersection_buffer_meters: Search radius around road intersections (default 10m).
         roundabout_buffer_meters: Buffer radius for roundabout entry/exit detection (default 10m).
@@ -664,6 +671,7 @@ def enrich_gps_points(
         res_df["is_roundabout"] = pd.Series(dtype=bool)
         res_df["roundabout_action"] = pd.Series(dtype=str)
         res_df["city"] = pd.Series(dtype=str)
+        res_df["county"] = pd.Series(dtype=str)
         res_df["country"] = pd.Series(dtype=str)
         res_df["road_name"] = pd.Series(dtype=str)
         res_df["road_type"] = pd.Series(dtype=str)
@@ -749,6 +757,7 @@ def enrich_gps_points(
         "is_roundabout": False,
         "roundabout_action": None,
         "city": None,
+        "county": None,
         "country": None,
         "road_name": None,
         "road_type": None,
@@ -915,6 +924,8 @@ def enrich_gps_points(
             geo = geocoded[i] if i < len(geocoded) else {}
             if not item.get("city") or item.get("city") == "None":
                 item["city"] = geo.get("city")
+            if not item.get("county") or item.get("county") == "None":
+                item["county"] = geo.get("county") or geo.get("admin2")
             if not item.get("country") or item.get("country") == "None":
                 item["country"] = geo.get("country_code") or geo.get("country")
 
@@ -942,6 +953,7 @@ def enrich_gps_points(
     enriched_df["is_roundabout"] = [r["is_roundabout"] for r in matched_results]
     enriched_df["roundabout_action"] = [r["roundabout_action"] for r in matched_results]
     enriched_df["city"] = [r["city"] for r in matched_results]
+    enriched_df["county"] = [r.get("county") for r in matched_results]
     enriched_df["country"] = [r["country"] for r in matched_results]
     enriched_df["road_name"] = [r["road_name"] for r in matched_results]
     enriched_df["road_type"] = [r["road_type"] for r in matched_results]

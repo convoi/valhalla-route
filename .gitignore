@@ -9,6 +9,8 @@ __pycache__/
 
 # Test, lint, and coverage caches
 .pytest_cache/
+.tmp_cache/
+.tmp_pytest/
 .mypy_cache/
 .ruff_cache/
 .coverage

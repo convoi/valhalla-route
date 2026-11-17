@@ -80,9 +80,9 @@ def test_enrich_with_mock_backend():
 
     with patch("valhallaroute.enricher.lookup_coordinates") as mock_geo:
         mock_geo.return_value = [
-            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
-            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
-            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
+            {"city": "Berlin", "county": "Berlin", "country_code": "DE", "country": "Germany"},
+            {"city": "Berlin", "county": "Berlin", "country_code": "DE", "country": "Germany"},
+            {"city": "Berlin", "county": "Berlin", "country_code": "DE", "country": "Germany"},
         ]
         res_df = enrich_gps_points(
             io.StringIO(csv_data),
@@ -113,6 +113,7 @@ def test_enrich_with_mock_backend():
     assert "is_roundabout" in res_df.columns
     assert "roundabout_action" in res_df.columns
     assert "city" in res_df.columns
+    assert "county" in res_df.columns
     assert "country" in res_df.columns
     assert "road_name" in res_df.columns
     assert "road_type" in res_df.columns
@@ -150,8 +151,9 @@ def test_enrich_with_mock_backend():
     assert bool(res_df.loc[2, "is_crossing"]) is False
     assert pd.isna(res_df.loc[2, "road_name"]) or res_df.loc[2, "road_name"] is None
     assert pd.isna(res_df.loc[2, "road_type"]) or res_df.loc[2, "road_type"] is None
-    # Offline geocoding should still populate city & country for Berlin coords
+    # Offline geocoding should still populate city, county & country for Berlin coords
     assert res_df.loc[2, "city"] is not None
+    assert res_df.loc[2, "county"] is not None
     assert res_df.loc[2, "country"] is not None
 
 
@@ -176,6 +178,7 @@ def test_empty_dataframe():
     assert "is_roundabout" in res.columns
     assert "roundabout_action" in res.columns
     assert "city" in res.columns
+    assert "county" in res.columns
     assert "country" in res.columns
     assert "road_name" in res.columns
     assert "road_type" in res.columns
@@ -226,12 +229,13 @@ def test_actor_backend_mock_actor():
     csv_data = "lat,lon\n52.52,13.40\n52.53,13.41\n"
     with patch("valhallaroute.enricher.lookup_coordinates") as mock_geo:
         mock_geo.return_value = [
-            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
-            {"city": "Berlin", "country_code": "DE", "country": "Germany"},
+            {"city": "Berlin", "county": "Berlin", "country_code": "DE", "country": "Germany"},
+            {"city": "Berlin", "county": "Berlin", "country_code": "DE", "country": "Germany"},
         ]
         res = enrich_gps_points(io.StringIO(csv_data), backend=backend)
     assert len(res) == 2
     assert res.loc[0, "city"] is not None
+    assert res.loc[0, "county"] is not None
 
 
 def test_intersection_detection():
