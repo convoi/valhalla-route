@@ -505,4 +505,23 @@ def test_intersection_stop_yield_curvature_attributes():
     assert pd.isna(res.loc[2, "intersection_edge_count"]) or res.loc[2, "intersection_edge_count"] is None
 
 
+def test_interpolation_distance_default_and_custom():
+    mock_resp = {
+        "admins": [{"country_text": "Germany"}],
+        "edges": [{"names": ["Road"], "road_class": "residential"}],
+        "matched_points": [{"type": "matched", "edge_index": 0}, {"type": "matched", "edge_index": 0}],
+    }
+    backend_default = MockBackend(mock_resp)
+    csv_data = "lat,lon\n52.52,13.40\n52.53,13.41\n"
+    enrich_gps_points(io.StringIO(csv_data), backend=backend_default)
+    assert len(backend_default.calls) == 1
+    assert backend_default.calls[0]["trace_options"]["interpolation_distance"] == 5.0
+
+    backend_custom = MockBackend(mock_resp)
+    enrich_gps_points(io.StringIO(csv_data), backend=backend_custom, interpolation_distance=15.0)
+    assert len(backend_custom.calls) == 1
+    assert backend_custom.calls[0]["trace_options"]["interpolation_distance"] == 15.0
+
+
+
 

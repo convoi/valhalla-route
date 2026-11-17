@@ -111,6 +111,13 @@ def build_enrich_parser() -> argparse.ArgumentParser:
         help="Search radius for entering/exiting roundabouts in meters (default: 10.0).",
     )
     parser.add_argument(
+        "--interpolation-distance",
+        dest="interpolation_distance",
+        type=float,
+        default=5.0,
+        help="Meili map-matching interpolation distance in meters (default: 5.0).",
+    )
+    parser.add_argument(
         "--no-auto-tiles",
         dest="no_auto_tiles",
         action="store_true",
@@ -291,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
             crossing_buffer_meters=args.crossing_buffer,
             intersection_buffer_meters=args.intersection_buffer,
             roundabout_buffer_meters=args.roundabout_buffer,
+            interpolation_distance=args.interpolation_distance,
             auto_build_tiles=not args.no_auto_tiles,
             osm_pbf=args.osm_pbf,
             osm_url=args.osm_url,

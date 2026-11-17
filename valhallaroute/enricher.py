@@ -431,6 +431,7 @@ def _execute_single_trace(
     shape_match: str = "map_snap",
     intersection_buffer_meters: float = 10.0,
     roundabout_buffer_meters: float = 10.0,
+    interpolation_distance: float = 5.0,
 ) -> list[dict[str, Any]]:
     """Execute a single trace_attributes request with graceful fallbacks."""
     payload = {
@@ -440,6 +441,9 @@ def _execute_single_trace(
         "filters": {
             "attributes": [],
             "action": "exclude",
+        },
+        "trace_options": {
+            "interpolation_distance": interpolation_distance,
         },
     }
     try:
@@ -502,6 +506,7 @@ def _call_backend_in_chunks(
     overlap: int = 5,
     intersection_buffer_meters: float = 10.0,
     roundabout_buffer_meters: float = 10.0,
+    interpolation_distance: float = 5.0,
 ) -> list[dict[str, Any]]:
     """
     Send shape points to Valhalla backend, handling chunking for large traces.
@@ -514,13 +519,25 @@ def _call_backend_in_chunks(
     if total_points == 1:
         single_shape = [shape[0], shape[0]]
         res = _execute_single_trace(
-            backend, single_shape, costing, shape_match, intersection_buffer_meters, roundabout_buffer_meters
+            backend,
+            single_shape,
+            costing,
+            shape_match,
+            intersection_buffer_meters,
+            roundabout_buffer_meters,
+            interpolation_distance,
         )
         return [res[0]]
 
     if total_points <= chunk_size:
         return _execute_single_trace(
-            backend, shape, costing, shape_match, intersection_buffer_meters, roundabout_buffer_meters
+            backend,
+            shape,
+            costing,
+            shape_match,
+            intersection_buffer_meters,
+            roundabout_buffer_meters,
+            interpolation_distance,
         )
 
     # Chunking for long traces
@@ -532,7 +549,13 @@ def _call_backend_in_chunks(
         chunk_shape = shape[start_idx:end_idx]
 
         chunk_res = _execute_single_trace(
-            backend, chunk_shape, costing, shape_match, intersection_buffer_meters, roundabout_buffer_meters
+            backend,
+            chunk_shape,
+            costing,
+            shape_match,
+            intersection_buffer_meters,
+            roundabout_buffer_meters,
+            interpolation_distance,
         )
 
         if start_idx == 0:
@@ -572,6 +595,7 @@ def enrich_gps_points(
     crossing_buffer_meters: float = 10.0,
     intersection_buffer_meters: float = 10.0,
     roundabout_buffer_meters: float = 10.0,
+    interpolation_distance: float = 5.0,
     chunk_size: int = 5000,
     auto_build_tiles: bool = True,
     osm_pbf: Union[str, Path, None] = None,
@@ -627,6 +651,7 @@ def enrich_gps_points(
         crossing_buffer_meters: Search radius around OSM crossings (default 10m).
         intersection_buffer_meters: Search radius around road intersections (default 10m).
         roundabout_buffer_meters: Buffer radius for roundabout entry/exit detection (default 10m).
+        interpolation_distance: Distance threshold in meters for Valhalla Meili map matching (default 5m).
         chunk_size: Maximum shape points per Valhalla request.
         auto_build_tiles: If True and local tiles are missing, downloads OSM data and builds them.
         osm_pbf: Path to local .osm.pbf file.
@@ -795,6 +820,7 @@ def enrich_gps_points(
                 chunk_size=chunk_size,
                 intersection_buffer_meters=intersection_buffer_meters,
                 roundabout_buffer_meters=roundabout_buffer_meters,
+                interpolation_distance=interpolation_distance,
             )
 
             # Assign back by row index in DataFrame
@@ -830,6 +856,7 @@ def enrich_gps_points(
             chunk_size=chunk_size,
             intersection_buffer_meters=intersection_buffer_meters,
             roundabout_buffer_meters=roundabout_buffer_meters,
+            interpolation_distance=interpolation_distance,
         )
 
     # Tile-aligned companion feature lookup (stops, yields, traffic lights, crossings)
